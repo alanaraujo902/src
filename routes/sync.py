@@ -1,0 +1,136 @@
+"""
+Rotas para sincronização de dados offline-first.
+"""
+import re
+from flask import Blueprint, request, jsonify
+from src.config.database import get_supabase_client
+from src.utils.auth import require_auth, get_current_user
+from datetime import datetime, timezone
+
+sync_bp = Blueprint('sync', __name__)
+
+def camel_to_snake(name):
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+# --- INÍCIO DA NOVA LÓGICA DE CONVERSÃO ---
+def convert_value(value):
+    """Tenta converter um valor de timestamp em milissegundos para string ISO 8601."""
+    # Verifica se o valor é um inteiro ou um float que parece um timestamp em ms
+    if isinstance(value, (int, float)) and value > 1000000000000: # Um trilhão (ano > 2001)
+        try:
+            # Converte de milissegundos para segundos e cria o objeto datetime
+            return datetime.fromtimestamp(value / 1000, tz=timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            # Se a conversão falhar, retorna o valor original
+            return value
+    return value
+
+def convert_payload(data):
+    """Converte recursivamente as chaves para snake_case e os valores de timestamp."""
+    if isinstance(data, dict):
+        new_dict = {}
+        for k, v in data.items():
+            new_key = camel_to_snake(k)
+            new_value = convert_payload(v) # Chamada recursiva para o valor
+            new_dict[new_key] = new_value
+        return new_dict
+    if isinstance(data, list):
+        return [convert_payload(i) for i in data]
+    
+    # Aplica a conversão de valor para itens que não são dicts/listas
+    return convert_value(data)
+# --- FIM DA NOVA LÓGICA DE CONVERSÃO ---
+
+
+@sync_bp.route('/batch', methods=['POST'])
+@require_auth
+def sync_batch_changes():
+    try:
+        changes = request.get_json()
+        if not isinstance(changes, list):
+            return jsonify({'error': 'O corpo da requisição deve ser uma lista'}), 400
+
+        supabase = get_supabase_client()
+        current_user = get_current_user()
+        results = []
+
+        print(f"\n--- [SYNC] Iniciando /batch para o usuário: {current_user['id']} ---")
+        print(f"--- [SYNC] Recebidas {len(changes)} alterações.")
+
+        for change in changes:
+            table_name = change.get('table')
+            operation = change.get('op')
+            payload_from_client = change.get('payload')
+
+            if not all([table_name, operation, payload_from_client]):
+                results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': 'Dados incompletos'})
+                continue
+
+            try:
+                # Usa a nova função de conversão que lida com chaves e valores
+                converted_payload = convert_payload(payload_from_client)
+                
+                # Garante que o user_id é o do usuário autenticado
+                converted_payload['user_id'] = current_user['id']
+
+                print(f"--- [SYNC] Processando: op={operation}, table={table_name}")
+                print(f"--- [SYNC] PAYLOAD FINAL PARA SUPABASE: {converted_payload}")
+
+                if operation == 'upsert':
+                    response = supabase.table(table_name).upsert(converted_payload).execute()
+                    
+                    if hasattr(response, 'error') and response.error is not None:
+                        print(f"--- [SYNC] !!! ERRO SUPABASE: {response.error.message}")
+                        results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': response.error.message})
+                    elif not response.data:
+                        print(f"--- [SYNC] !!! AVISO: A operação não retornou dados. Provável falha de RLS.")
+                        results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': 'Falha ao gravar, verifique as permissões (RLS).'})
+                    else:
+                        print(f"--- [SYNC] SUCESSO. Resposta: {response.data}")
+                        results.append({'row_id': change.get('row_id'), 'status': 'success'})
+                else:
+                    results.append({'row_id': change.get('row_id'), 'status': 'skipped', 'error': f'Operação "{operation}" não suportada'})
+            except Exception as e:
+                print(f"--- [SYNC] !!! EXCEÇÃO PYTHON: {e}")
+                results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': str(e)})
+
+        print("--- [SYNC] Fim do processamento /batch ---\n")
+        return jsonify({'message': 'Lote processado', 'results': results}), 200
+
+    except Exception as e:
+        print(f"ERRO CRÍTICO NO /api/sync/batch: {e}")
+        return jsonify({'error': f'Erro interno do servidor: {e}'}), 500
+
+# O endpoint /delta permanece o mesmo
+@sync_bp.route('/delta/<string:table_name>', methods=['GET'])
+@require_auth
+def sync_delta_changes(table_name):
+    # (Este código já está funcionando, mantenha-o)
+    try:
+        since_timestamp = request.args.get('since')
+        current_user = get_current_user()
+        supabase = get_supabase_client()
+
+        allowed_tables = ['subjects', 'summaries', 'review_sessions', 'study_decks', 'deck_summaries']
+        if table_name not in allowed_tables:
+            return jsonify({'error': f'Tabela "{table_name}" não permitida'}), 400
+
+        query = supabase.table(table_name).select('*').eq('user_id', current_user['id'])
+
+        if since_timestamp:
+            query = query.gte('updated_at', since_timestamp)
+
+        response = query.execute()
+        items = response.data if response.data else []
+        
+        server_now = datetime.now(timezone.utc).isoformat()
+
+        return jsonify({
+            'items': items,
+            'server_timestamp': server_now
+        }), 200
+
+    except Exception as e:
+        print(f"ERRO CRÍTICO NO /api/sync/delta/{table_name}: {e}")
+        return jsonify({'error': f'Erro interno do servidor: {e}'}), 500
