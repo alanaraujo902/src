@@ -171,35 +171,27 @@ def update_subject(subject_id):
 @subjects_bp.route('/<subject_id>', methods=['DELETE'])
 @require_auth
 def delete_subject(subject_id):
-    """Deletar matéria"""
+    """Deletar matéria e todos os seus descendentes (soft delete) usando RPC."""
     try:
         current_user = get_current_user()
         supabase = get_supabase_client()
-        
-        # Verificar se matéria existe e pertence ao usuário
-        existing_response = supabase.table('subjects').select('*').eq('id', subject_id).eq('user_id', current_user['id']).execute()
+
+        # 1. Verificar se a matéria existe e pertence ao usuário (para segurança)
+        existing_response = supabase.table('subjects').select('id').eq('id', subject_id).eq('user_id', current_user['id']).maybe_single().execute()
         
         if not existing_response.data:
             return jsonify({'error': 'Matéria não encontrada'}), 404
         
-        # Verificar se tem filhos
-        children_response = supabase.table('subjects').select('id').eq('parent_id', subject_id).execute()
-        
-        if children_response.data:
-            return jsonify({'error': 'Não é possível deletar matéria que possui submatérias'}), 400
-        
-        # Verificar se tem resumos
-        summaries_response = supabase.table('summaries').select('id').eq('subject_id', subject_id).execute()
-        
-        if summaries_response.data:
-            return jsonify({'error': 'Não é possível deletar matéria que possui resumos'}), 400
-        
-        # Deletar matéria
-        response = supabase.table('subjects').delete().eq('id', subject_id).eq('user_id', current_user['id']).execute()
-        
-        return jsonify({'message': 'Matéria deletada com sucesso'}), 200
+        # 2. Chamar a função RPC para realizar o soft delete em cascata de forma segura e atômica
+        supabase.rpc('soft_delete_subject_and_descendants', {
+            'start_subject_id': subject_id,
+            'p_user_id': current_user['id']
+        }).execute()
+
+        return jsonify({'message': 'Matéria e seus conteúdos foram movidos para a lixeira.'}), 200
         
     except Exception as e:
+        print(f"ERRO AO DELETAR MATÉRIA: {e}")
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
 

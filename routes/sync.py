@@ -5,7 +5,7 @@ import re
 from flask import Blueprint, request, jsonify
 from src.config.database import get_supabase_client
 from src.utils.auth import require_auth, get_current_user
-from datetime import datetime, timezone
+from datetime import datetime, timezone # <-- Certifique-se de que timezone está importado
 
 sync_bp = Blueprint('sync', __name__)
 
@@ -13,34 +13,39 @@ def camel_to_snake(name):
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
-# --- INÍCIO DA NOVA LÓGICA DE CONVERSÃO ---
+# --- INÍCIO DA NOVA LÓGICA DE CONVERSÃO CORRIGIDA ---
 def convert_value(value):
     """Tenta converter um valor de timestamp em milissegundos para string ISO 8601."""
-    # Verifica se o valor é um inteiro ou um float que parece um timestamp em ms
-    if isinstance(value, (int, float)) and value > 1000000000000: # Um trilhão (ano > 2001)
+    # Verifica se o valor é um inteiro ou float e se parece um timestamp em ms (maior que o ano 2001)
+    if isinstance(value, (int, float)) and value > 1000000000000:
         try:
-            # Converte de milissegundos para segundos e cria o objeto datetime
+            # Converte de milissegundos para segundos, cria o objeto datetime com fuso horário UTC
+            # e formata para a string ISO 8601 que o Supabase/PostgreSQL entende.
             return datetime.fromtimestamp(value / 1000, tz=timezone.utc).isoformat()
         except (ValueError, TypeError):
-            # Se a conversão falhar, retorna o valor original
+            # Se a conversão falhar por qualquer motivo, retorna o valor original sem quebrar.
             return value
     return value
 
 def convert_payload(data):
-    """Converte recursivamente as chaves para snake_case e os valores de timestamp."""
+    """
+    Converte recursivamente as chaves do payload para snake_case e os
+    valores de timestamp em milissegundos para strings ISO 8601.
+    """
     if isinstance(data, dict):
         new_dict = {}
         for k, v in data.items():
             new_key = camel_to_snake(k)
-            new_value = convert_payload(v) # Chamada recursiva para o valor
+            # A conversão de valor é aplicada dentro da chamada recursiva
+            new_value = convert_payload(v)
             new_dict[new_key] = new_value
         return new_dict
     if isinstance(data, list):
         return [convert_payload(i) for i in data]
     
-    # Aplica a conversão de valor para itens que não são dicts/listas
+    # Aplica a conversão de valor para itens que não são dicionários ou listas
     return convert_value(data)
-# --- FIM DA NOVA LÓGICA DE CONVERSÃO ---
+# --- FIM DA NOVA LÓGICA DE CONVERSÃO CORRIGIDA ---
 
 
 @sync_bp.route('/batch', methods=['POST'])
@@ -73,6 +78,10 @@ def sync_batch_changes():
                 
                 # Garante que o user_id é o do usuário autenticado
                 converted_payload['user_id'] = current_user['id']
+                
+                # ADICIONADO: Garante que updated_at seja sempre a hora do servidor para consistência
+                converted_payload['updated_at'] = datetime.now(timezone.utc).isoformat()
+
 
                 print(f"--- [SYNC] Processando: op={operation}, table={table_name}")
                 print(f"--- [SYNC] PAYLOAD FINAL PARA SUPABASE: {converted_payload}")
