@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 
 reviews_bp = Blueprint('reviews', __name__)
 
-# <<< SUBSTITUA A FUNÇÃO 'get_pending_reviews' INTEIRA POR ESTA >>>
 @reviews_bp.route('/pending', methods=['GET'])
 @require_auth
 def get_pending_reviews():
@@ -20,22 +19,25 @@ def get_pending_reviews():
         current_user = get_current_user()
         supabase = get_supabase_client()
         
-        # Esta é a consulta correta e definitiva. Ela busca sessões de revisão que:
+        # Query para buscar sessões de revisão que:
         # 1. Pertencem ao usuário atual ('user_id')
         # 2. NÃO estão marcadas como completas ('is_completed', False)
         # 3. A data da próxima revisão já passou ou é agora ('next_review', lte('now()'))
+        # 4. <<< ADICIONADA: O resumo associado NÃO ESTÁ soft-deletado (summaries.deleted_at IS NULL) >>>
+        
         response = (
             supabase.table('review_sessions')
             .select('''
                 *,
                 summaries (
                     *,
-                    subjects (*)
+                    subjects (*, deleted_at) # Adicionado deleted_at para sujeitos também, se necessário
                 )
             ''')
             .eq('user_id', current_user['id'])
             .eq('is_completed', False)
             .lte('next_review', 'now()')
+            .is_('summaries.deleted_at', None) # <<< FILTRO CHAVE ADICIONADO AQUI >>>
             .order('next_review', desc=False)
             .execute()
         )

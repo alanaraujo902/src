@@ -11,6 +11,7 @@ statistics_bp = Blueprint('statistics', __name__)
 @statistics_bp.route('/overview', methods=['GET'])
 @require_auth
 def get_overview_stats():
+
     """Obter estatísticas gerais do usuário"""
     try:
         current_user = get_current_user()
