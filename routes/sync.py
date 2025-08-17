@@ -2,10 +2,15 @@
 Rotas para sincronização de dados offline-first.
 """
 import re
-from flask import Blueprint, request, jsonify
+import json
+from flask import Blueprint, request, jsonify, Response
+
 from src.config.database import get_supabase_client
 from src.utils.auth import require_auth, get_current_user
 from datetime import datetime, timezone # <-- Certifique-se de que timezone está importado
+from datetime import date, datetime
+
+
 
 sync_bp = Blueprint('sync', __name__)
 
@@ -115,17 +120,31 @@ def sync_batch_changes():
 @sync_bp.route('/delta/<string:table_name>', methods=['GET'])
 @require_auth
 def sync_delta_changes(table_name):
-    # (Este código já está funcionando, mantenha-o)
+    # (O início da função permanece o mesmo)
     try:
         since_timestamp = request.args.get('since')
         current_user = get_current_user()
         supabase = get_supabase_client()
 
         allowed_tables = ['subjects', 'summaries', 'review_sessions', 'study_decks', 'deck_summaries']
+        
+        
+        
         if table_name not in allowed_tables:
             return jsonify({'error': f'Tabela "{table_name}" não permitida'}), 400
+        
 
-        query = supabase.table(table_name).select('*').eq('user_id', current_user['id'])
+        if table_name == 'deck_summaries':
+            # Consulta especial com JOIN para a tabela deck_summaries
+            query = supabase.table(table_name).select('*, study_decks!inner(user_id)') \
+                .eq('study_decks.user_id', current_user['id'])
+        else:
+            # A consulta padrão para todas as outras tabelas (que têm user_id)
+            query = supabase.table(table_name).select('*').eq('user_id', current_user['id'])
+        
+        
+    
+
 
         if since_timestamp:
             query = query.gte('updated_at', since_timestamp)
@@ -135,11 +154,34 @@ def sync_delta_changes(table_name):
         
         server_now = datetime.now(timezone.utc).isoformat()
 
-        return jsonify({
+        # --- INÍCIO DA CORREÇÃO ---
+        
+        # 1. Crie o payload da resposta como um dicionário Python
+        payload = {
             'items': items,
             'server_timestamp': server_now
-        }), 200
+        }
+
+        # 2. Use json.dumps com nosso conversor personalizado para criar a string JSON
+        json_response = json.dumps(payload, default=json_converter)
+        
+        # 3. Retorne a resposta JSON, informando ao Flask que o conteúdo já é JSON
+        return Response(json_response, mimetype='application/json')
+
+        # --- FIM DA CORREÇÃO ---
 
     except Exception as e:
         print(f"ERRO CRÍTICO NO /api/sync/delta/{table_name}: {e}")
         return jsonify({'error': f'Erro interno do servidor: {e}'}), 500
+    
+
+
+# Crie esta função auxiliar para lidar com a conversão
+# Você pode colocá-la logo abaixo das importações
+def json_converter(o):
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()
+    # Adicione outras conversões aqui se necessário (ex: para UUID)
+    # if isinstance(o, uuid.UUID):
+    #     return str(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")

@@ -60,3 +60,18 @@ def get_profile():
     """Obter o perfil do usuário autenticado."""
     current_user = get_current_user()
     return jsonify({'user': current_user}), 200
+
+
+@auth_bp.route('/logout', methods=['POST'])
+@require_auth
+def logout():
+    """Fazer logout do usuário invalidando o token no Supabase."""
+    try:
+        supabase = get_supabase_client()
+        # A biblioteca do Supabase cuida da invalidação da sessão
+        supabase.auth.sign_out()
+        
+        return jsonify({'message': 'Logout realizado com sucesso'}), 200
+    except Exception as e:
+        print(f"ERRO AO FAZER LOGOUT: {e}")
+        return jsonify({'error': str(e)}), 400
