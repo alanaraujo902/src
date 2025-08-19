@@ -77,18 +77,28 @@ def generate_summary():
         
         query = data['query']
         model = data.get('model', 'sonar-pro')
+        # <-- ADICIONE ESTA LINHA -->
+        # Pega o estilo do prompt da requisição, ou usa 'default' se não for enviado.
+        prompt_style = data.get('prompt_style', 'default')
         
-        # <<< INÍCIO DA CORREÇÃO >>>
-        # O bloco que verificava o subject_id foi completamente removido.
-        # A responsabilidade deste endpoint é apenas gerar o conteúdo.
-        # <<< FIM DA CORREÇÃO >>>
-        
-        # Gerar resumo com Perplexity
         perplexity = get_perplexity_client()
-        result = perplexity.generate_summary(query, model)
+        # <-- MODIFIQUE ESTA LINHA para passar o novo parâmetro -->
+        result = perplexity.generate_summary(query, model, prompt_style=prompt_style)
         
         if not result['success']:
             return jsonify({'error': f'Erro ao gerar resumo: {result.get("error", "Erro desconhecido")}'}), 500
+        
+        return jsonify({
+            'message': 'Resumo gerado com sucesso',
+            'content': result['content'],
+            'citations': result['citations'],
+            'search_results': result['search_results'],
+            'model_used': result['model_used'],
+            'tokens_used': result['tokens_used']
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
         
         return jsonify({
             'message': 'Resumo gerado com sucesso',
