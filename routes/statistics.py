@@ -350,7 +350,7 @@ def log_study_session():
         # Chama a função RPC atualizada no Supabase
         supabase.rpc('update_study_statistics', {
             'user_uuid': current_user['id'],
-            'p_study_time_minutes': study_time_minutes
+            'total_study_time_minutes_add': study_time_minutes
         }).execute()
 
         return jsonify({'message': 'Sessão de estudo registrada com sucesso'}), 200

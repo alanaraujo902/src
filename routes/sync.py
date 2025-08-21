@@ -92,9 +92,9 @@ def sync_batch_changes():
                         # em vez de fazer um upsert genérico.
                         response = supabase.rpc('update_study_statistics', {
                             'user_uuid': current_user['id'],
-                            'p_study_time_minutes': converted_payload.get('total_study_time_minutes', 0),
                             'summaries_created_count': converted_payload.get('summaries_created', 0),
-                            'summaries_reviewed_count': converted_payload.get('summaries_reviewed', 0)
+                            'summaries_reviewed_count': converted_payload.get('summaries_reviewed', 0),
+                            'total_study_time_minutes_add': converted_payload.get('total_study_time_minutes', 0)
                             # Nota: Não estamos sincronizando 'subjects_studied' neste fluxo simplificado.
                         }).execute()
                     else:
