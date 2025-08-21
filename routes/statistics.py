@@ -330,3 +330,31 @@ def get_goals_progress():
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
+# No final de src/routes/statistics.py
+
+@statistics_bp.route('/log-session', methods=['POST'])
+@require_auth
+def log_study_session():
+    """Registra o tempo de uma sessão de estudo."""
+    try:
+        current_user = get_current_user()
+        data = request.get_json()
+        
+        study_time_minutes = data.get('study_time_minutes', 0)
+        
+        if study_time_minutes <= 0:
+            return jsonify({'message': 'Nenhum tempo de estudo para registrar'}), 200
+
+        supabase = get_supabase_client()
+        
+        # Chama a função RPC atualizada no Supabase
+        supabase.rpc('update_study_statistics', {
+            'user_uuid': current_user['id'],
+            'p_study_time_minutes': study_time_minutes
+        }).execute()
+
+        return jsonify({'message': 'Sessão de estudo registrada com sucesso'}), 200
+
+    except Exception as e:
+        print(f"ERRO AO REGISTRAR SESSÃO DE ESTUDO: {e}")
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500

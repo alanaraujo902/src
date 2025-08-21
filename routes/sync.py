@@ -78,26 +78,34 @@ def sync_batch_changes():
                 continue
 
             try:
-                # Usa a nova função de conversão que lida com chaves e valores
                 converted_payload = convert_payload(payload_from_client)
-                
-                # Garante que o user_id é o do usuário autenticado
                 converted_payload['user_id'] = current_user['id']
-                
-                # ADICIONADO: Garante que updated_at seja sempre a hora do servidor para consistência
                 converted_payload['updated_at'] = datetime.now(timezone.utc).isoformat()
-
 
                 print(f"--- [SYNC] Processando: op={operation}, table={table_name}")
                 print(f"--- [SYNC] PAYLOAD FINAL PARA SUPABASE: {converted_payload}")
 
                 if operation == 'upsert':
-                    response = supabase.table(table_name).upsert(converted_payload).execute()
+                    # --- INÍCIO DA CORREÇÃO ---
+                    if table_name == 'study_statistics':
+                        # Caso especial: usa a função RPC para somar os valores
+                        # em vez de fazer um upsert genérico.
+                        response = supabase.rpc('update_study_statistics', {
+                            'user_uuid': current_user['id'],
+                            'p_study_time_minutes': converted_payload.get('total_study_time_minutes', 0),
+                            'summaries_created_count': converted_payload.get('summaries_created', 0),
+                            'summaries_reviewed_count': converted_payload.get('summaries_reviewed', 0)
+                            # Nota: Não estamos sincronizando 'subjects_studied' neste fluxo simplificado.
+                        }).execute()
+                    else:
+                        # Lógica original para todas as outras tabelas
+                        response = supabase.table(table_name).upsert(converted_payload).execute()
+                    # --- FIM DA CORREÇÃO ---
                     
                     if hasattr(response, 'error') and response.error is not None:
                         print(f"--- [SYNC] !!! ERRO SUPABASE: {response.error.message}")
                         results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': response.error.message})
-                    elif not response.data:
+                    elif not response.data and table_name != 'study_statistics': # RPC não retorna dados, então ignoramos a verificação para ela
                         print(f"--- [SYNC] !!! AVISO: A operação não retornou dados. Provável falha de RLS.")
                         results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': 'Falha ao gravar, verifique as permissões (RLS).'})
                     else:
@@ -120,59 +128,57 @@ def sync_batch_changes():
 @sync_bp.route('/delta/<string:table_name>', methods=['GET'])
 @require_auth
 def sync_delta_changes(table_name):
-    # (O início da função permanece o mesmo)
     try:
         since_timestamp = request.args.get('since')
+        # --- INÍCIO DA MODIFICAÇÃO 1 ---
+        # Obter parâmetros de paginação da requisição, com valores padrão
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+        # --- FIM DA MODIFICAÇÃO 1 ---
+        
         current_user = get_current_user()
         supabase = get_supabase_client()
 
-        allowed_tables = ['subjects', 'summaries', 'review_sessions', 'study_decks', 'deck_summaries']
-        
-        
+        # ... (a lista `allowed_tables` permanece a mesma)
+        allowed_tables = [
+            'subjects', 'summaries', 'review_sessions', 'study_decks', 
+            'deck_summaries', 'study_statistics'
+        ]
         
         if table_name not in allowed_tables:
             return jsonify({'error': f'Tabela "{table_name}" não permitida'}), 400
         
-
+        # ... (a lógica de `if table_name == 'deck_summaries'` permanece a mesma)
         if table_name == 'deck_summaries':
-            # Consulta especial com JOIN para a tabela deck_summaries
             query = supabase.table(table_name).select('*, study_decks!inner(user_id)') \
                 .eq('study_decks.user_id', current_user['id'])
         else:
-            # A consulta padrão para todas as outras tabelas (que têm user_id)
             query = supabase.table(table_name).select('*').eq('user_id', current_user['id'])
         
-        
-    
-
-
         if since_timestamp:
             query = query.gte('updated_at', since_timestamp)
+
+        # --- INÍCIO DA MODIFICAÇÃO 2 ---
+        # Aplicar paginação à consulta do Supabase
+        query = query.range(offset, offset + limit - 1)
+        # --- FIM DA MODIFICAÇÃO 2 ---
 
         response = query.execute()
         items = response.data if response.data else []
         
+        # ... (o resto da função permanece o mesmo)
         server_now = datetime.now(timezone.utc).isoformat()
-
-        # --- INÍCIO DA CORREÇÃO ---
-        
-        # 1. Crie o payload da resposta como um dicionário Python
         payload = {
             'items': items,
             'server_timestamp': server_now
         }
-
-        # 2. Use json.dumps com nosso conversor personalizado para criar a string JSON
         json_response = json.dumps(payload, default=json_converter)
-        
-        # 3. Retorne a resposta JSON, informando ao Flask que o conteúdo já é JSON
         return Response(json_response, mimetype='application/json')
-
-        # --- FIM DA CORREÇÃO ---
 
     except Exception as e:
         print(f"ERRO CRÍTICO NO /api/sync/delta/{table_name}: {e}")
         return jsonify({'error': f'Erro interno do servidor: {e}'}), 500
+
     
 
 
