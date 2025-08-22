@@ -94,7 +94,7 @@ def sync_batch_changes():
                             'user_uuid': current_user['id'],
                             'summaries_created_count': converted_payload.get('summaries_created', 0),
                             'summaries_reviewed_count': converted_payload.get('summaries_reviewed', 0),
-                            'total_study_time_minutes_add': converted_payload.get('total_study_time_minutes', 0)
+                            'total_study_time_ms_add': converted_payload.get('total_study_time_ms', 0) # Alterado
                             # Nota: Não estamos sincronizando 'subjects_studied' neste fluxo simplificado.
                         }).execute()
                     else:

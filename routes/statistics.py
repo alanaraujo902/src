@@ -47,7 +47,7 @@ def get_overview_stats():
         today_data = today_stats.data[0] if today_stats.data else {
             'summaries_created': 0,
             'summaries_reviewed': 0,
-            'total_study_time_minutes': 0
+            'total_study_time_ms': 0
         }
         
         # Revisões pendentes
@@ -60,7 +60,7 @@ def get_overview_stats():
                 'days_analyzed': days_back,
                 'total_summaries': stats['total_summaries'],
                 'total_reviews': stats['total_reviews'],
-                'total_study_time_minutes': stats['total_study_time'],
+                'total_study_time_ms': stats['total_study_time_ms'],
                 'avg_daily_summaries': float(stats['avg_daily_summaries']),
                 'avg_daily_reviews': float(stats['avg_daily_reviews']),
                 'subjects_count': stats['subjects_count']
@@ -68,7 +68,7 @@ def get_overview_stats():
             'today_stats': {
                 'summaries_created': today_data['summaries_created'],
                 'summaries_reviewed': today_data['summaries_reviewed'],
-                'study_time_minutes': today_data['total_study_time_minutes']
+                'study_time_ms': today_data['total_study_time_ms']  # Alterado de _minutes para _ms
             },
             'streak_days': stats['streak_days'],
             'pending_reviews': pending_count
@@ -76,6 +76,10 @@ def get_overview_stats():
         
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+
+
+
 
 @statistics_bp.route('/daily', methods=['GET'])
 @require_auth
@@ -340,9 +344,9 @@ def log_study_session():
         current_user = get_current_user()
         data = request.get_json()
         
-        study_time_minutes = data.get('study_time_minutes', 0)
+        study_time_ms = data.get('study_time_ms', 0) # Espera milissegundos
         
-        if study_time_minutes <= 0:
+        if study_time_ms <= 0:
             return jsonify({'message': 'Nenhum tempo de estudo para registrar'}), 200
 
         supabase = get_supabase_client()
@@ -350,7 +354,7 @@ def log_study_session():
         # Chama a função RPC atualizada no Supabase
         supabase.rpc('update_study_statistics', {
             'user_uuid': current_user['id'],
-            'total_study_time_minutes_add': study_time_minutes
+            'total_study_time_ms_add': study_time_ms
         }).execute()
 
         return jsonify({'message': 'Sessão de estudo registrada com sucesso'}), 200
