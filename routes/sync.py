@@ -53,15 +53,46 @@ def convert_payload(data):
 # --- FIM DA NOVA LÓGICA DE CONVERSÃO CORRIGIDA ---
 
 
+sync_bp = Blueprint('sync', __name__)
+
+def camel_to_snake(name):
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+# --- INÍCIO DA NOVA LÓGICA DE CONVERSÃO CORRIGIDA ---
+def convert_value(value):
+    """Tenta converter um valor de timestamp em milissegundos para string ISO 8601."""
+    if isinstance(value, (int, float)) and value > 1000000000000:
+        try:
+            return datetime.fromtimestamp(value / 1000, tz=timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            return value
+    return value
+
+def convert_payload(data):
+    """
+    Converte recursivamente as chaves do payload para snake_case e os
+    valores de timestamp em milissegundos para strings ISO 8601.
+    """
+    if isinstance(data, dict):
+        new_dict = {}
+        for k, v in data.items():
+            new_key = camel_to_snake(k)
+            new_value = convert_payload(v)
+            new_dict[new_key] = new_value
+        return new_dict
+    if isinstance(data, list):
+        return [convert_payload(i) for i in data]
+    
+    return convert_value(data)
+# --- FIM DA NOVA LÓGICA DE CONVERSÃO CORRIGIDA ---
+
+
 @sync_bp.route('/batch', methods=['POST'])
 @require_auth
 def sync_batch_changes():
     """
     Processa um lote de mudanças vindas do cliente (offline-first).
-    - Para tabelas comuns: faz upsert do payload já convertido e carimba `updated_at` (UTC).
-    - Para `study_logs`: NÃO carimba `updated_at` (a tabela não possui essa coluna).
-    - Para `study_statistics`: NÃO faz upsert; chama a RPC `update_study_statistics`
-      somando contadores e tempo total de estudo, sem tocar diretamente na tabela.
     """
     try:
         changes = request.get_json()
@@ -90,11 +121,15 @@ def sync_batch_changes():
 
             try:
                 converted_payload = convert_payload(payload_from_client)
-                converted_payload['user_id'] = current_user['id']
+                
+                # --- INÍCIO DA CORREÇÃO ---
+                # Adiciona o user_id apenas se a tabela não for uma tabela de junção
+                # que não possui essa coluna diretamente.
+                if table_name not in ['deck_summaries', 'study_statistics']:
+                    converted_payload['user_id'] = current_user['id']
+                # --- FIM DA CORREÇÃO ---
 
-                # Só adiciona updated_at para tabelas que têm essa coluna
                 if table_name not in ['study_logs', 'study_statistics']:
-                    # Importante: ISO 8601 em UTC
                     converted_payload['updated_at'] = datetime.now(timezone.utc).isoformat()
 
                 print(f"--- [SYNC] Processando: op={operation}, table={table_name}")
@@ -102,8 +137,6 @@ def sync_batch_changes():
 
                 if operation == 'upsert':
                     if table_name == 'study_statistics':
-                        # Caso especial: usamos a RPC para somar/acumular valores
-                        # Espera-se que o cliente envie apenas os incrementos do período.
                         rpc_params = {
                             'user_uuid': current_user['id'],
                             'summaries_created_count': converted_payload.get('summaries_created', 0),
@@ -112,7 +145,6 @@ def sync_batch_changes():
                         }
                         response = supabase.rpc('update_study_statistics', rpc_params).execute()
 
-                        # A RPC normalmente não retorna `data`. Verificamos erro explicitamente.
                         if hasattr(response, 'error') and response.error is not None:
                             print(f"--- [SYNC] !!! ERRO SUPABASE (RPC): {response.error.message}")
                             results.append({
@@ -125,10 +157,8 @@ def sync_batch_changes():
                             results.append({'row_id': change.get('row_id'), 'status': 'success'})
 
                     else:
-                        # Upsert padrão para as demais tabelas (inclui study_logs, sem updated_at)
                         response = supabase.table(table_name).upsert(converted_payload).execute()
 
-                        # Tratamento de erro padrão do client supabase-py
                         if hasattr(response, 'error') and response.error is not None:
                             print(f"--- [SYNC] !!! ERRO SUPABASE: {response.error.message}")
                             results.append({
@@ -137,7 +167,6 @@ def sync_batch_changes():
                                 'error': response.error.message
                             })
                         elif not getattr(response, 'data', None):
-                            # Algumas políticas RLS podem engolir o upsert e não retornar linhas.
                             print(f"--- [SYNC] !!! AVISO: Operação sem retorno de dados. Possível falha de RLS.")
                             results.append({
                                 'row_id': change.get('row_id'),
@@ -149,7 +178,6 @@ def sync_batch_changes():
                             results.append({'row_id': change.get('row_id'), 'status': 'success'})
 
                 else:
-                    # Se desejar suportar 'delete' no futuro, tratar aqui.
                     results.append({
                         'row_id': change.get('row_id'),
                         'status': 'skipped',
