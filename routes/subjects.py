@@ -323,3 +323,25 @@ def get_free_review_summaries(subject_id):
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
     #coment
+
+
+@subjects_bp.route('/<subject_id>/study-time', methods=['GET'])
+@require_auth
+def get_subject_study_time(subject_id):
+    """Obtém o tempo total de estudo para uma matéria e suas submatérias."""
+    try:
+        current_user = get_current_user()
+        supabase = get_supabase_client()
+
+        # Chama a função SQL via RPC
+        response = supabase.rpc('get_total_study_time_for_subject', {
+            'p_subject_id': subject_id,
+            'p_user_id': current_user['id']
+        }).execute()
+
+        total_time_ms = response.data if response.data else 0
+
+        return jsonify({'total_study_time_ms': total_time_ms}), 200
+
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500

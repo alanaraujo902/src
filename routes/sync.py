@@ -56,6 +56,13 @@ def convert_payload(data):
 @sync_bp.route('/batch', methods=['POST'])
 @require_auth
 def sync_batch_changes():
+    """
+    Processa um lote de mudanças vindas do cliente (offline-first).
+    - Para tabelas comuns: faz upsert do payload já convertido e carimba `updated_at` (UTC).
+    - Para `study_logs`: NÃO carimba `updated_at` (a tabela não possui essa coluna).
+    - Para `study_statistics`: NÃO faz upsert; chama a RPC `update_study_statistics`
+      somando contadores e tempo total de estudo, sem tocar diretamente na tabela.
+    """
     try:
         changes = request.get_json()
         if not isinstance(changes, list):
@@ -74,48 +81,88 @@ def sync_batch_changes():
             payload_from_client = change.get('payload')
 
             if not all([table_name, operation, payload_from_client]):
-                results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': 'Dados incompletos'})
+                results.append({
+                    'row_id': change.get('row_id'),
+                    'status': 'failed',
+                    'error': 'Dados incompletos'
+                })
                 continue
 
             try:
                 converted_payload = convert_payload(payload_from_client)
                 converted_payload['user_id'] = current_user['id']
-                converted_payload['updated_at'] = datetime.now(timezone.utc).isoformat()
+
+                # Só adiciona updated_at para tabelas que têm essa coluna
+                if table_name not in ['study_logs', 'study_statistics']:
+                    # Importante: ISO 8601 em UTC
+                    converted_payload['updated_at'] = datetime.now(timezone.utc).isoformat()
 
                 print(f"--- [SYNC] Processando: op={operation}, table={table_name}")
                 print(f"--- [SYNC] PAYLOAD FINAL PARA SUPABASE: {converted_payload}")
 
                 if operation == 'upsert':
-                    # --- INÍCIO DA CORREÇÃO ---
                     if table_name == 'study_statistics':
-                        # Caso especial: usa a função RPC para somar os valores
-                        # em vez de fazer um upsert genérico.
-                        response = supabase.rpc('update_study_statistics', {
+                        # Caso especial: usamos a RPC para somar/acumular valores
+                        # Espera-se que o cliente envie apenas os incrementos do período.
+                        rpc_params = {
                             'user_uuid': current_user['id'],
                             'summaries_created_count': converted_payload.get('summaries_created', 0),
                             'summaries_reviewed_count': converted_payload.get('summaries_reviewed', 0),
-                            'total_study_time_ms_add': converted_payload.get('total_study_time_ms', 0) # Alterado
-                            # Nota: Não estamos sincronizando 'subjects_studied' neste fluxo simplificado.
-                        }).execute()
+                            'total_study_time_ms_add': converted_payload.get('total_study_time_ms', 0),
+                        }
+                        response = supabase.rpc('update_study_statistics', rpc_params).execute()
+
+                        # A RPC normalmente não retorna `data`. Verificamos erro explicitamente.
+                        if hasattr(response, 'error') and response.error is not None:
+                            print(f"--- [SYNC] !!! ERRO SUPABASE (RPC): {response.error.message}")
+                            results.append({
+                                'row_id': change.get('row_id'),
+                                'status': 'failed',
+                                'error': response.error.message
+                            })
+                        else:
+                            print(f"--- [SYNC] SUCESSO (RPC).")
+                            results.append({'row_id': change.get('row_id'), 'status': 'success'})
+
                     else:
-                        # Lógica original para todas as outras tabelas
+                        # Upsert padrão para as demais tabelas (inclui study_logs, sem updated_at)
                         response = supabase.table(table_name).upsert(converted_payload).execute()
-                    # --- FIM DA CORREÇÃO ---
-                    
-                    if hasattr(response, 'error') and response.error is not None:
-                        print(f"--- [SYNC] !!! ERRO SUPABASE: {response.error.message}")
-                        results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': response.error.message})
-                    elif not response.data and table_name != 'study_statistics': # RPC não retorna dados, então ignoramos a verificação para ela
-                        print(f"--- [SYNC] !!! AVISO: A operação não retornou dados. Provável falha de RLS.")
-                        results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': 'Falha ao gravar, verifique as permissões (RLS).'})
-                    else:
-                        print(f"--- [SYNC] SUCESSO. Resposta: {response.data}")
-                        results.append({'row_id': change.get('row_id'), 'status': 'success'})
+
+                        # Tratamento de erro padrão do client supabase-py
+                        if hasattr(response, 'error') and response.error is not None:
+                            print(f"--- [SYNC] !!! ERRO SUPABASE: {response.error.message}")
+                            results.append({
+                                'row_id': change.get('row_id'),
+                                'status': 'failed',
+                                'error': response.error.message
+                            })
+                        elif not getattr(response, 'data', None):
+                            # Algumas políticas RLS podem engolir o upsert e não retornar linhas.
+                            print(f"--- [SYNC] !!! AVISO: Operação sem retorno de dados. Possível falha de RLS.")
+                            results.append({
+                                'row_id': change.get('row_id'),
+                                'status': 'failed',
+                                'error': 'Falha ao gravar, verifique as permissões (RLS).'
+                            })
+                        else:
+                            print(f"--- [SYNC] SUCESSO. Resposta: {response.data}")
+                            results.append({'row_id': change.get('row_id'), 'status': 'success'})
+
                 else:
-                    results.append({'row_id': change.get('row_id'), 'status': 'skipped', 'error': f'Operação "{operation}" não suportada'})
+                    # Se desejar suportar 'delete' no futuro, tratar aqui.
+                    results.append({
+                        'row_id': change.get('row_id'),
+                        'status': 'skipped',
+                        'error': f'Operação "{operation}" não suportada'
+                    })
+
             except Exception as e:
                 print(f"--- [SYNC] !!! EXCEÇÃO PYTHON: {e}")
-                results.append({'row_id': change.get('row_id'), 'status': 'failed', 'error': str(e)})
+                results.append({
+                    'row_id': change.get('row_id'),
+                    'status': 'failed',
+                    'error': str(e)
+                })
 
         print("--- [SYNC] Fim do processamento /batch ---\n")
         return jsonify({'message': 'Lote processado', 'results': results}), 200
