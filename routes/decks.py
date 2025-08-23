@@ -174,23 +174,31 @@ def update_deck(deck_id):
 @decks_bp.route('/<deck_id>', methods=['DELETE'])
 @require_auth
 def delete_deck(deck_id):
-    """Deletar deck"""
+    """Deletar deck (soft delete) e suas associações."""
     try:
         current_user = get_current_user()
         supabase = get_supabase_client()
-        
-        # Verificar se deck existe e pertence ao usuário
-        existing_response = supabase.table('study_decks').select('*').eq('id', deck_id).eq('user_id', current_user['id']).execute()
-        
+
+        # 1. Verificar se o deck existe e pertence ao usuário
+        existing_response = supabase.table('study_decks').select('id').eq('id', deck_id).eq('user_id', current_user['id']).execute()
         if not existing_response.data:
             return jsonify({'error': 'Deck não encontrado'}), 404
-        
-        # Deletar deck (cascata deletará deck_summaries)
-        response = supabase.table('study_decks').delete().eq('id', deck_id).eq('user_id', current_user['id']).execute()
-        
-        return jsonify({'message': 'Deck deletado com sucesso'}), 200
-        
+
+        # 2. Deletar as associações na tabela 'deck_summaries'.
+        # Isso remove os resumos DO DECK, mas não os resumos em si.
+        supabase.table('deck_summaries').delete().eq('deck_id', deck_id).execute()
+
+        # 3. Marcar o deck como deletado (soft delete)
+        now = datetime.now(timezone.utc).isoformat()
+        response = supabase.table('study_decks').update({
+            'deleted_at': now
+        }).eq('id', deck_id).eq('user_id', current_user['id']).execute()
+
+        print(f"Soft deleted deck {deck_id} for user {current_user['id']}")
+        return jsonify({'message': 'Deck movido para a lixeira com sucesso'}), 200
+
     except Exception as e:
+        print(f"ERRO AO DELETAR DECK: {e}")
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
 @decks_bp.route('/<deck_id>/summaries', methods=['POST'])
