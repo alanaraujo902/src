@@ -362,3 +362,27 @@ def log_study_session():
     except Exception as e:
         print(f"ERRO AO REGISTRAR SESSÃO DE ESTUDO: {e}")
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+    
+
+# Seu endpoint existente está correto e chamará a nova versão da função RPC.
+@statistics_bp.route('/subject-performance', methods=['GET'])
+@require_auth
+def get_subject_performance_ranking():
+    """Obter o ranking de desempenho por matéria."""
+    try:
+        current_user = get_current_user()
+        supabase = get_supabase_client()
+        
+        # Chama a nova função RPC que criamos no Supabase
+        response = supabase.rpc('get_subject_performance_ranking', {
+            'p_user_id': current_user['id']
+        }).execute()
+        
+        if response.data:
+            return jsonify({'ranking': response.data}), 200
+        else:
+            return jsonify({'ranking': []}), 200
+            
+    except Exception as e:
+        print(f"ERRO AO OBTER RANKING DE MATÉRIAS: {e}")
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
