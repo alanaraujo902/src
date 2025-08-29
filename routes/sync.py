@@ -207,14 +207,13 @@ def sync_delta_changes(table_name):
         since_timestamp = request.args.get('since')
         # --- INÍCIO DA MODIFICAÇÃO 1 ---
         # Obter parâmetros de paginação da requisição, com valores padrão
-        limit = int(request.args.get('limit', 100))
+        limit = int(request.args.get('limit', 100)) # Padrão de 100 por página
         offset = int(request.args.get('offset', 0))
         # --- FIM DA MODIFICAÇÃO 1 ---
         
         current_user = get_current_user()
         supabase = get_supabase_client()
 
-        # ... (a lista `allowed_tables` permanece a mesma)
         allowed_tables = [
             'subjects', 'summaries', 'review_sessions', 'study_decks', 
             'deck_summaries', 'study_statistics'
@@ -223,8 +222,8 @@ def sync_delta_changes(table_name):
         if table_name not in allowed_tables:
             return jsonify({'error': f'Tabela "{table_name}" não permitida'}), 400
         
-        # ... (a lógica de `if table_name == 'deck_summaries'` permanece a mesma)
         if table_name == 'deck_summaries':
+            # A query para tabelas de junção precisa de um join para filtrar pelo user_id
             query = supabase.table(table_name).select('*, study_decks!inner(user_id)') \
                 .eq('study_decks.user_id', current_user['id'])
         else:
@@ -241,7 +240,6 @@ def sync_delta_changes(table_name):
         response = query.execute()
         items = response.data if response.data else []
         
-        # ... (o resto da função permanece o mesmo)
         server_now = datetime.now(timezone.utc).isoformat()
         payload = {
             'items': items,

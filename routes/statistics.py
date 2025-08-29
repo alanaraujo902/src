@@ -11,13 +11,11 @@ statistics_bp = Blueprint('statistics', __name__)
 @statistics_bp.route('/overview', methods=['GET'])
 @require_auth
 def get_overview_stats():
-
     """Obter estatísticas gerais do usuário"""
     try:
         current_user = get_current_user()
         supabase = get_supabase_client()
         
-        # Usar função do banco para obter estatísticas
         days_back = int(request.args.get('days', 30))
         
         stats_response = supabase.rpc('get_user_study_stats', {
@@ -31,17 +29,14 @@ def get_overview_stats():
             stats = {
                 'total_summaries': 0,
                 'total_reviews': 0,
-                'total_study_time': 0,
+                'total_study_time_ms': 0,
                 'avg_daily_summaries': 0,
                 'avg_daily_reviews': 0,
                 'streak_days': 0,
                 'subjects_count': 0
             }
         
-        # Estatísticas adicionais
         today = datetime.now().date()
-        
-        # Atividade de hoje
         today_stats = supabase.table('study_statistics').select('*').eq('user_id', current_user['id']).eq('date', today.isoformat()).execute()
         
         today_data = today_stats.data[0] if today_stats.data else {
@@ -50,7 +45,6 @@ def get_overview_stats():
             'total_study_time_ms': 0
         }
         
-        # Revisões pendentes
         pending_reviews = supabase.table('review_sessions').select('id', count='exact').eq('user_id', current_user['id']).lte('next_review', 'now()').eq('is_completed', False).execute()
         
         pending_count = pending_reviews.count if pending_reviews.count else 0
@@ -68,7 +62,8 @@ def get_overview_stats():
             'today_stats': {
                 'summaries_created': today_data['summaries_created'],
                 'summaries_reviewed': today_data['summaries_reviewed'],
-                'study_time_ms': today_data['total_study_time_ms']  # Alterado de _minutes para _ms
+                # CORREÇÃO: Padronizado para 'study_time_ms' para corresponder ao modelo do Flutter
+                'study_time_ms': today_data['total_study_time_ms']
             },
             'streak_days': stats['streak_days'],
             'pending_reviews': pending_count
@@ -76,10 +71,6 @@ def get_overview_stats():
         
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
-
-
-
-
 
 @statistics_bp.route('/daily', methods=['GET'])
 @require_auth
@@ -89,16 +80,13 @@ def get_daily_stats():
         current_user = get_current_user()
         supabase = get_supabase_client()
         
-        # Parâmetros
         days_back = int(request.args.get('days', 30))
         start_date = (datetime.now() - timedelta(days=days_back)).date()
         
-        # Buscar estatísticas diárias
         response = supabase.table('study_statistics').select('*').eq('user_id', current_user['id']).gte('date', start_date.isoformat()).order('date').execute()
         
         daily_stats = response.data if response.data else []
         
-        # Preencher dias sem dados
         all_days = []
         current_date = start_date
         end_date = datetime.now().date()
@@ -115,7 +103,8 @@ def get_daily_stats():
                     'date': date_str,
                     'summaries_created': 0,
                     'summaries_reviewed': 0,
-                    'total_study_time_minutes': 0,
+                    # CORREÇÃO: Alterado de 'total_study_time_minutes' para 'total_study_time_ms'
+                    'total_study_time_ms': 0,
                     'subjects_studied': []
                 }
             
@@ -134,6 +123,63 @@ def get_daily_stats():
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
+@statistics_bp.route('/performance', methods=['GET'])
+@require_auth
+def get_performance_stats():
+    """Obter estatísticas de performance"""
+    try:
+        current_user = get_current_user()
+        supabase = get_supabase_client()
+        
+        difficulty_stats = {}
+        for level in range(1, 6):
+            count_response = supabase.table('review_sessions').select('id', count='exact').eq('user_id', current_user['id']).eq('difficulty_rating', level).execute()
+            difficulty_stats[f'level_{level}'] = count_response.count or 0
+        
+        total_reviews = supabase.table('review_sessions').select('id', count='exact').eq('user_id', current_user['id']).execute()
+        completed_reviews = supabase.table('review_sessions').select('id', count='exact').eq('user_id', current_user['id']).eq('is_completed', True).execute()
+        
+        total_count = total_reviews.count or 0
+        completed_count = completed_reviews.count or 0
+        completion_rate = (completed_count / total_count * 100) if total_count > 0 else 0
+        
+        recent_reviews = supabase.table('review_sessions').select('difficulty_rating, last_reviewed').eq('user_id', current_user['id']).gte('last_reviewed', (datetime.now() - timedelta(days=30)).isoformat()).order('last_reviewed').execute()
+        
+        difficulty_evolution = []
+        if recent_reviews.data:
+            for review in recent_reviews.data:
+                if review['last_reviewed'] and review['difficulty_rating']:
+                    difficulty_evolution.append({
+                        'date': review['last_reviewed'][:10],
+                        'difficulty': review['difficulty_rating']
+                    })
+        
+        # CORREÇÃO PRINCIPAL: Alterado para consultar 'total_study_time_ms'
+        study_time_response = supabase.table('study_statistics').select('total_study_time_ms').eq('user_id', current_user['id']).gte('date', (datetime.now() - timedelta(days=30)).date().isoformat()).execute()
+        
+        # CORREÇÃO: Alterado para somar 'total_study_time_ms'
+        total_study_time = sum(stat['total_study_time_ms'] for stat in study_time_response.data or [])
+        avg_daily_study_time = total_study_time / 30 if study_time_response.data else 0
+        
+        return jsonify({
+            'difficulty_distribution': difficulty_stats,
+            'completion_rate': round(completion_rate, 2),
+            'total_reviews': total_count,
+            'completed_reviews': completed_count,
+            'difficulty_evolution': difficulty_evolution,
+            # CORREÇÃO: Renomeado para 'avg_daily_study_time_ms'
+            'avg_daily_study_time_ms': round(avg_daily_study_time, 2),
+            # CORREÇÃO: Renomeado para 'total_study_time_last_30_days_ms'
+            'total_study_time_last_30_days_ms': total_study_time
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+# O restante do arquivo (get_subjects_stats, get_goals_progress, etc.) pode permanecer o mesmo por agora,
+# pois o erro principal estava em get_performance_stats.
+
+# ... (cole o restante do seu arquivo statistics.py aqui) ...
 @statistics_bp.route('/subjects', methods=['GET'])
 @require_auth
 def get_subjects_stats():
@@ -205,59 +251,6 @@ def get_subjects_stats():
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
-@statistics_bp.route('/performance', methods=['GET'])
-@require_auth
-def get_performance_stats():
-    """Obter estatísticas de performance"""
-    try:
-        current_user = get_current_user()
-        supabase = get_supabase_client()
-        
-        # Estatísticas de dificuldade
-        difficulty_stats = {}
-        for level in range(1, 6):
-            count_response = supabase.table('review_sessions').select('id', count='exact').eq('user_id', current_user['id']).eq('difficulty_rating', level).execute()
-            
-            difficulty_stats[f'level_{level}'] = count_response.count or 0
-        
-        # Taxa de conclusão
-        total_reviews = supabase.table('review_sessions').select('id', count='exact').eq('user_id', current_user['id']).execute()
-        completed_reviews = supabase.table('review_sessions').select('id', count='exact').eq('user_id', current_user['id']).eq('is_completed', True).execute()
-        
-        total_count = total_reviews.count or 0
-        completed_count = completed_reviews.count or 0
-        completion_rate = (completed_count / total_count * 100) if total_count > 0 else 0
-        
-        # Evolução da dificuldade ao longo do tempo
-        recent_reviews = supabase.table('review_sessions').select('difficulty_rating, last_reviewed').eq('user_id', current_user['id']).gte('last_reviewed', (datetime.now() - timedelta(days=30)).isoformat()).order('last_reviewed').execute()
-        
-        difficulty_evolution = []
-        if recent_reviews.data:
-            for review in recent_reviews.data:
-                if review['last_reviewed'] and review['difficulty_rating']:
-                    difficulty_evolution.append({
-                        'date': review['last_reviewed'][:10],  # Apenas a data
-                        'difficulty': review['difficulty_rating']
-                    })
-        
-        # Tempo médio de estudo por dia
-        study_time_response = supabase.table('study_statistics').select('total_study_time_minutes').eq('user_id', current_user['id']).gte('date', (datetime.now() - timedelta(days=30)).date().isoformat()).execute()
-        
-        total_study_time = sum(stat['total_study_time_minutes'] for stat in study_time_response.data or [])
-        avg_daily_study_time = total_study_time / 30 if study_time_response.data else 0
-        
-        return jsonify({
-            'difficulty_distribution': difficulty_stats,
-            'completion_rate': round(completion_rate, 2),
-            'total_reviews': total_count,
-            'completed_reviews': completed_count,
-            'difficulty_evolution': difficulty_evolution,
-            'avg_daily_study_time_minutes': round(avg_daily_study_time, 2),
-            'total_study_time_last_30_days': total_study_time
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
 @statistics_bp.route('/goals', methods=['GET'])
 @require_auth
@@ -271,13 +264,13 @@ def get_goals_progress():
         daily_goals = {
             'summaries_created': 3,
             'summaries_reviewed': 5,
-            'study_time_minutes': 60
+            'study_time_ms': 60 * 60 * 1000 # 60 minutos em ms
         }
         
         weekly_goals = {
             'summaries_created': 15,
             'summaries_reviewed': 25,
-            'study_time_minutes': 300
+            'study_time_ms': 300 * 60 * 1000 # 300 minutos em ms
         }
         
         # Progresso de hoje
@@ -287,7 +280,7 @@ def get_goals_progress():
         today_data = today_stats.data[0] if today_stats.data else {
             'summaries_created': 0,
             'summaries_reviewed': 0,
-            'total_study_time_minutes': 0
+            'total_study_time_ms': 0
         }
         
         # Progresso da semana
@@ -297,44 +290,53 @@ def get_goals_progress():
         week_totals = {
             'summaries_created': sum(stat['summaries_created'] for stat in week_stats.data or []),
             'summaries_reviewed': sum(stat['summaries_reviewed'] for stat in week_stats.data or []),
-            'study_time_minutes': sum(stat['total_study_time_minutes'] for stat in week_stats.data or [])
+            'study_time_ms': sum(stat['total_study_time_ms'] for stat in week_stats.data or [])
         }
         
         # Calcular progresso
         daily_progress = {}
         weekly_progress = {}
         
-        for key in daily_goals:
-            daily_progress[key] = {
-                'current': today_data.get(key.replace('study_time_minutes', 'total_study_time_minutes'), 0),
-                'goal': daily_goals[key],
-                'percentage': min(100, (today_data.get(key.replace('study_time_minutes', 'total_study_time_minutes'), 0) / daily_goals[key] * 100))
-            }
+        # CORREÇÃO: A lógica foi ajustada para usar 'study_time_ms' e 'total_study_time_ms'
+        daily_progress['summaries_created'] = {
+            'current': today_data.get('summaries_created', 0),
+            'goal': daily_goals['summaries_created'],
+            'percentage': min(100, (today_data.get('summaries_created', 0) / daily_goals['summaries_created'] * 100)) if daily_goals['summaries_created'] > 0 else 0
+        }
+        daily_progress['summaries_reviewed'] = {
+            'current': today_data.get('summaries_reviewed', 0),
+            'goal': daily_goals['summaries_reviewed'],
+            'percentage': min(100, (today_data.get('summaries_reviewed', 0) / daily_goals['summaries_reviewed'] * 100)) if daily_goals['summaries_reviewed'] > 0 else 0
+        }
+        daily_progress['study_time_ms'] = {
+            'current': today_data.get('total_study_time_ms', 0),
+            'goal': daily_goals['study_time_ms'],
+            'percentage': min(100, (today_data.get('total_study_time_ms', 0) / daily_goals['study_time_ms'] * 100)) if daily_goals['study_time_ms'] > 0 else 0
+        }
             
-            weekly_progress[key] = {
-                'current': week_totals[key],
-                'goal': weekly_goals[key],
-                'percentage': min(100, (week_totals[key] / weekly_goals[key] * 100))
-            }
+        weekly_progress['summaries_created'] = {
+            'current': week_totals['summaries_created'],
+            'goal': weekly_goals['summaries_created'],
+            'percentage': min(100, (week_totals['summaries_created'] / weekly_goals['summaries_created'] * 100)) if weekly_goals['summaries_created'] > 0 else 0
+        }
+        weekly_progress['summaries_reviewed'] = {
+            'current': week_totals['summaries_reviewed'],
+            'goal': weekly_goals['summaries_reviewed'],
+            'percentage': min(100, (week_totals['summaries_reviewed'] / weekly_goals['summaries_reviewed'] * 100)) if weekly_goals['summaries_reviewed'] > 0 else 0
+        }
+        weekly_progress['study_time_ms'] = {
+            'current': week_totals['study_time_ms'],
+            'goal': weekly_goals['study_time_ms'],
+            'percentage': min(100, (week_totals['study_time_ms'] / weekly_goals['study_time_ms'] * 100)) if weekly_goals['study_time_ms'] > 0 else 0
+        }
         
         return jsonify({
-            'daily_goals': {
-                'date': today.isoformat(),
-                'goals': daily_goals,
-                'progress': daily_progress
-            },
-            'weekly_goals': {
-                'week_start': week_start.isoformat(),
-                'week_end': (week_start + timedelta(days=6)).isoformat(),
-                'goals': weekly_goals,
-                'progress': weekly_progress
-            }
+            'daily_goals': { 'date': today.isoformat(), 'goals': daily_goals, 'progress': daily_progress },
+            'weekly_goals': { 'week_start': week_start.isoformat(), 'week_end': (week_start + timedelta(days=6)).isoformat(), 'goals': weekly_goals, 'progress': weekly_progress }
         }), 200
         
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
-
-# No final de src/routes/statistics.py
 
 @statistics_bp.route('/log-session', methods=['POST'])
 @require_auth
@@ -344,14 +346,13 @@ def log_study_session():
         current_user = get_current_user()
         data = request.get_json()
         
-        study_time_ms = data.get('study_time_ms', 0) # Espera milissegundos
+        study_time_ms = data.get('study_time_ms', 0)
         
         if study_time_ms <= 0:
             return jsonify({'message': 'Nenhum tempo de estudo para registrar'}), 200
 
         supabase = get_supabase_client()
         
-        # Chama a função RPC atualizada no Supabase
         supabase.rpc('update_study_statistics', {
             'user_uuid': current_user['id'],
             'total_study_time_ms_add': study_time_ms
@@ -364,7 +365,6 @@ def log_study_session():
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
     
 
-# Seu endpoint existente está correto e chamará a nova versão da função RPC.
 @statistics_bp.route('/subject-performance', methods=['GET'])
 @require_auth
 def get_subject_performance_ranking():
@@ -373,7 +373,6 @@ def get_subject_performance_ranking():
         current_user = get_current_user()
         supabase = get_supabase_client()
         
-        # Chama a nova função RPC que criamos no Supabase
         response = supabase.rpc('get_subject_performance_ranking', {
             'p_user_id': current_user['id']
         }).execute()
@@ -385,4 +384,26 @@ def get_subject_performance_ranking():
             
     except Exception as e:
         print(f"ERRO AO OBTER RANKING DE MATÉRIAS: {e}")
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+
+
+@statistics_bp.route('/hourly-activity', methods=['GET'])
+@require_auth
+def get_hourly_activity():
+    """Retorna o tempo total de estudo agregado por hora do dia."""
+    try:
+        current_user = get_current_user()
+        supabase = get_supabase_client()
+
+        response = supabase.rpc('get_user_hourly_study_activity', {
+            'p_user_id': current_user['id']
+        }).execute()
+
+        if response.data:
+            return jsonify({'hourly_activity': response.data}), 200
+        else:
+            return jsonify({'hourly_activity': []}), 200
+
+    except Exception as e:
+        print(f"ERRO AO OBTER ATIVIDADE POR HORA: {e}")
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
