@@ -18,6 +18,7 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-pro
 app.config['SUPABASE_URL'] = os.getenv('SUPABASE_URL')
 app.config['SUPABASE_KEY'] = os.getenv('SUPABASE_KEY')
 app.config['PERPLEXITY_API_KEY'] = os.getenv('PERPLEXITY_API_KEY')
+app.config['GPT_API_KEY'] = os.getenv('GPT_API_KEY')
 
 # Habilitar CORS
 CORS(app, origins="*")

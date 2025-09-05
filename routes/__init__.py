@@ -15,6 +15,7 @@ def register_blueprints(app: Flask):
     from .decks import decks_bp
     from .statistics import statistics_bp
     from .sync import sync_bp  # Importa o blueprint de sincronização corrigido
+    from .flashcards import flashcards_bp
 
     # Registrar os blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -24,3 +25,4 @@ def register_blueprints(app: Flask):
     app.register_blueprint(decks_bp, url_prefix='/api/decks')
     app.register_blueprint(statistics_bp, url_prefix='/api/statistics')
     app.register_blueprint(sync_bp, url_prefix='/api/sync')
+    app.register_blueprint(flashcards_bp, url_prefix='/api/flashcards')
