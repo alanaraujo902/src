@@ -108,7 +108,7 @@ class PerplexityClient:
     def generate_summary(
         self, 
         query: str, 
-        model: str = "sonar-pro",
+        model: str = "sonar",
         max_tokens: int = 1000,
         prompt_style: str = "default"
     ) -> Dict:
