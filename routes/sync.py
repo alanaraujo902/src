@@ -216,7 +216,7 @@ def sync_delta_changes(table_name):
 
         allowed_tables = [
             'subjects', 'summaries', 'review_sessions', 'study_decks', 
-            'deck_summaries', 'study_statistics', 'flashcard_decks', 'flashcards'
+            'deck_summaries', 'study_statistics', 'flashcard_decks', 'flashcards', 'flashcard_review_sessions'
         ]
         
         if table_name not in allowed_tables:
