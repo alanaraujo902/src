@@ -50,43 +50,61 @@ def complete_flashcard_review():
         data = request.get_json()
         
         flashcard_id = data.get('flashcard_id')
-        difficulty_rating = int(data.get('difficulty_rating'))
-        
-        if not flashcard_id or not difficulty_rating:
+        difficulty_rating = data.get('difficulty_rating')
+
+        if not flashcard_id or difficulty_rating is None:
             return jsonify({'error': 'flashcard_id e difficulty_rating são obrigatórios'}), 400
+        
+        try:
+            difficulty_rating = int(difficulty_rating)
+        except ValueError:
+            return jsonify({'error': 'difficulty_rating deve ser um número inteiro'}), 400
+
+        if difficulty_rating < 1 or difficulty_rating > 5:
+            return jsonify({'error': 'difficulty_rating deve estar entre 1 e 5'}), 400
 
         supabase = get_supabase_client()
-        
-        review_response = supabase.table('flashcard_review_sessions').select('*').eq('user_id', current_user['id']).eq('flashcard_id', flashcard_id).execute()
+
+        review_response = supabase.table('flashcard_review_sessions')\
+            .select('*')\
+            .eq('user_id', current_user['id'])\
+            .eq('flashcard_id', flashcard_id)\
+            .execute()
         
         if not review_response.data:
             return jsonify({'error': 'Sessão de revisão do flashcard não encontrada'}), 404
-            
-        current_review = review_response.data[0]
         
-        # Reutilizamos a MESMA função SQL genérica!
-        calc_response = supabase.rpc('calculate_next_review', {
-            'current_ease_factor': current_review['ease_factor'],
-            'current_interval': current_review['interval_days'],
-            'difficulty_rating': difficulty_rating
+        current_review = review_response.data[0]
+
+        # NOVA função RPC com pesos (sem session_card_grades aqui)
+        calc_response = supabase.rpc('calculate_weighted_next_review', {
+            'p_user_id': current_user['id'],
+            'p_item_id': flashcard_id,
+            'p_item_type': 'flashcard',
+            'p_grade': difficulty_rating,
+            'p_session_card_grades': None
         }).execute()
 
         if calc_response.data:
             next_review_data = calc_response.data[0]
             update_data = {
-                'last_reviewed': datetime.now().isoformat(),
+                'last_reviewed': datetime.now(timezone.utc).isoformat(),
                 'next_review': next_review_data['next_review_date'],
                 'review_count': current_review['review_count'] + 1,
                 'difficulty_rating': difficulty_rating,
                 'ease_factor': next_review_data['new_ease_factor'],
                 'interval_days': next_review_data['new_interval'],
-                'is_completed': (6 - difficulty_rating) >= 4 
+                'last_weight_multiplier': next_review_data['new_weight_multiplier'],
+                'is_completed': (6 - difficulty_rating) >= 4
             }
-            
-            update_response = supabase.table('flashcard_review_sessions').update(update_data).eq('id', current_review['id']).select('*').execute()
+
+            update_response = supabase.table('flashcard_review_sessions')\
+                .update(update_data)\
+                .eq('id', current_review['id'])\
+                .select('*')\
+                .execute()
 
             if update_response.data:
-                # Opcional: registrar estatística de flashcard revisado
                 return jsonify({
                     'message': 'Revisão de flashcard completada com sucesso',
                     'review_session': update_response.data[0]
@@ -95,6 +113,6 @@ def complete_flashcard_review():
                 return jsonify({'error': 'Erro ao atualizar revisão do flashcard'}), 400
         else:
             return jsonify({'error': 'Erro ao calcular próxima revisão'}), 500
-            
+
     except Exception as e:
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500

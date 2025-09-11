@@ -126,25 +126,21 @@ def complete_review():
         
         summary_id = data['summary_id']
         difficulty_rating = int(data['difficulty_rating'])
+        session_card_grades = data.get('session_card_grades')  # <- Novo campo opcional
         
         if difficulty_rating < 1 or difficulty_rating > 5:
             return jsonify({'error': 'difficulty_rating deve estar entre 1 e 5'}), 400
         
         supabase = get_supabase_client()
         
-        # --- INÍCIO DO BLOCO DE DEPURAÇÃO ---
         user_id = current_user['id']
         print("\n--- INICIANDO /reviews/complete ---")
         print(f"Buscando review_session para user_id: {user_id}")
         print(f"Buscando review_session para summary_id: {summary_id}")
-        # --- FIM DO BLOCO DE DEPURAÇÃO ---
         
         # Buscar sessão de revisão atual
         review_response = supabase.table('review_sessions').select('*').eq('user_id', user_id).eq('summary_id', summary_id).execute()
-        
-        # --- INÍCIO DO BLOCO DE DEPURAÇÃO ---
         print(f"Resultado da busca no Supabase: {review_response.data}")
-        # --- FIM DO BLOCO DE DEPURAÇÃO ---
 
         if not review_response.data:
             print("!!! ERRO: Sessão de revisão NÃO encontrada no banco de dados. Retornando 404. !!!")
@@ -152,33 +148,33 @@ def complete_review():
         
         current_review = review_response.data[0]
         
-        # Calcular próxima revisão usando função do banco
-        calc_response = supabase.rpc('calculate_next_review', {
-            'current_ease_factor': current_review['ease_factor'],
-            'current_interval': current_review['interval_days'],
-            'difficulty_rating': difficulty_rating
+        # Nova chamada à função RPC com pesos (mais inteligente)
+        calc_response = supabase.rpc('calculate_weighted_next_review', {
+            'p_user_id': user_id,
+            'p_item_id': summary_id,
+            'p_item_type': 'summary',
+            'p_grade': difficulty_rating,
+            'p_session_card_grades': session_card_grades
         }).execute()
         
         if calc_response.data:
             next_review_data = calc_response.data[0]
             
-            # Atualizar sessão de revisão
             update_data = {
-                'last_reviewed': datetime.now().isoformat(),
+                'last_reviewed': datetime.now(timezone.utc).isoformat(),
                 'next_review': next_review_data['next_review_date'],
                 'review_count': current_review['review_count'] + 1,
                 'difficulty_rating': difficulty_rating,
                 'ease_factor': next_review_data['new_ease_factor'],
                 'interval_days': next_review_data['new_interval'],
-                # <<< CORREÇÃO SUTIL: A lógica de 'is_completed' deve ser baseada na QUALIDADE, não na dificuldade.
-                # Se a dificuldade for 4 (Fácil) ou 5 (Muito Fácil), a qualidade (q) será >= 4
-                'is_completed': (6 - difficulty_rating) >= 4
+                'last_weight_multiplier': next_review_data['new_weight_multiplier'],
+                'is_completed': (6 - difficulty_rating) >= 4  # Se dificuldade for 4 ou 5, qualidade (q) ≥ 4
             }
             
             update_response = supabase.table('review_sessions').update(update_data).eq('id', current_review['id']).select('*').execute()
             
             if update_response.data:
-                # Atualizar estatísticas
+                # Atualizar estatísticas de estudo
                 supabase.rpc('update_study_statistics', {
                     'user_uuid': user_id,
                     'summaries_reviewed_count': 1
