@@ -75,3 +75,28 @@ def logout():
     except Exception as e:
         print(f"ERRO AO FAZER LOGOUT: {e}")
         return jsonify({'error': str(e)}), 400
+    
+@auth_bp.route('/preferences', methods=['PUT'])
+@require_auth
+def update_preferences():
+    """Atualiza as preferências de estudo do usuário."""
+    data = request.get_json()
+    if not data or not data.get('study_preferences'):
+        return jsonify({'error': 'Dados de preferências são obrigatórios'}), 400
+
+    try:
+        current_user = get_current_user()
+        supabase = get_supabase_client()
+
+        # Atualiza a coluna 'study_preferences' na tabela 'user_profiles'
+        response = supabase.table('user_profiles').update({
+            'study_preferences': data['study_preferences']
+        }).eq('id', current_user['id']).execute()
+
+        if response.data:
+            return jsonify({'message': 'Preferências atualizadas com sucesso', 'preferences': response.data[0]['study_preferences']}), 200
+        else:
+            return jsonify({'error': 'Erro ao atualizar preferências'}), 400
+
+    except Exception as e:
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
