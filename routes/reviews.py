@@ -115,84 +115,87 @@ def start_review_session():
 @reviews_bp.route('/complete', methods=['POST'])
 @require_auth
 def complete_review():
-    """Marcar revisão como completa e calcular próxima"""
     try:
         current_user = get_current_user()
         data = request.get_json()
-        
-        required_fields = ['summary_id', 'difficulty_rating']
-        if not data or not all(data.get(field) for field in required_fields):
-            return jsonify({'error': 'Campos obrigatórios: summary_id, difficulty_rating'}), 400
+
+        if not data or 'summary_id' not in data or 'difficulty_rating' not in data:
+            return jsonify({"error": "Missing required fields"}), 400
         
         summary_id = data['summary_id']
         difficulty_rating = int(data['difficulty_rating'])
-        session_card_grades = data.get('session_card_grades')  # <- Novo campo opcional
-        
-        if difficulty_rating < 1 or difficulty_rating > 5:
-            return jsonify({'error': 'difficulty_rating deve estar entre 1 e 5'}), 400
         
         supabase = get_supabase_client()
-        
         user_id = current_user['id']
-        print("\n--- INICIANDO /reviews/complete ---")
-        print(f"Buscando review_session para user_id: {user_id}")
-        print(f"Buscando review_session para summary_id: {summary_id}")
-        
-        # Buscar sessão de revisão atual
-        review_response = supabase.table('review_sessions').select('*').eq('user_id', user_id).eq('summary_id', summary_id).execute()
-        print(f"Resultado da busca no Supabase: {review_response.data}")
 
-        if not review_response.data:
-            print("!!! ERRO: Sessão de revisão NÃO encontrada no banco de dados. Retornando 404. !!!")
-            return jsonify({'error': 'Sessão de revisão não encontrada'}), 404
+        # --- NOVA LÓGICA DE ACOPLAMENTO ---
+        # 1. Buscar todos os flashcards associados a este resumo
+        flashcards_response = supabase.table('flashcards').select('id').eq('summary_id', summary_id).eq('user_id', user_id).execute()
         
-        current_review = review_response.data[0]
+        coupling_data = None
+        if flashcards_response.data:
+            flashcard_ids = [fc['id'] for fc in flashcards_response.data]
+
+            # 2. Buscar as sessões de revisão desses flashcards para obter as notas mais recentes
+            sessions_response = supabase.table('flashcard_review_sessions').select('difficulty_rating, review_count').in_('flashcard_id', flashcard_ids).execute()
+            
+            if sessions_response.data:
+                all_grades_are_1 = all(s['difficulty_rating'] == 5 for s in sessions_response.data) # No app, 5 é Muito Difícil (g=1 na sua fórmula)
+
+                card_grades_for_coupling = {
+                    "all_grades_are_1": all_grades_are_1,
+                    "grades": [
+                        {
+                            "grade": s['difficulty_rating'], 
+                            "weight": min(1.0, s['review_count'] / 3.0) # Peso por confiança (k=3)
+                        } 
+                        for s in sessions_response.data
+                    ]
+                }
+                coupling_data = card_grades_for_coupling
+
+        # ------------------------------------
         
-        # Nova chamada à função RPC com pesos (mais inteligente)
-        calc_response = supabase.rpc('calculate_weighted_next_review', {
-            'p_user_id': user_id,
+        # Chamar a nova função RPC v2
+        calc_response = supabase.rpc('calculate_srs_update_v2', {
             'p_item_id': summary_id,
             'p_item_type': 'summary',
+            'p_user_id': user_id,
             'p_grade': difficulty_rating,
-            'p_session_card_grades': session_card_grades
+            'p_coupling_data': coupling_data  # Passa os dados de acoplamento
         }).execute()
         
-        if calc_response.data:
-            next_review_data = calc_response.data[0]
-            
-            update_data = {
-                'last_reviewed': datetime.now(timezone.utc).isoformat(),
-                'next_review': next_review_data['next_review_date'],
-                'review_count': current_review['review_count'] + 1,
-                'difficulty_rating': difficulty_rating,
-                'ease_factor': next_review_data['new_ease_factor'],
-                'interval_days': next_review_data['new_interval'],
-                'last_weight_multiplier': next_review_data['new_weight_multiplier'],
-                'is_completed': (6 - difficulty_rating) >= 4  # Se dificuldade for 4 ou 5, qualidade (q) ≥ 4
-            }
-            
-            update_response = supabase.table('review_sessions').update(update_data).eq('id', current_review['id']).select('*').execute()
-            
-            if update_response.data:
-                # Atualizar estatísticas de estudo
-                supabase.rpc('update_study_statistics', {
-                    'user_uuid': user_id,
-                    'summaries_reviewed_count': 1
-                }).execute()
-                
-                print("--- SUCESSO: Revisão completada e atualizada. ---")
-                return jsonify({
-                    'message': 'Revisão completada com sucesso',
-                    'review_session': update_response.data[0]
-                }), 200
-            else:
-                return jsonify({'error': 'Erro ao atualizar revisão'}), 400
-        else:
-            return jsonify({'error': 'Erro ao calcular próxima revisão'}), 500
-            
+        if not calc_response.data:
+            return jsonify({"error": "Failed to calculate SRS update"}), 500
+
+        srs_data = calc_response.data[0]
+        new_interval = srs_data['new_interval']
+        new_ease_factor = srs_data['new_ease_factor']
+        new_review_date = srs_data['new_review_date']
+
+        # Inserir na tabela 'review_sessions'
+        session_insert = {
+            'user_id': user_id,
+            'summary_id': summary_id,
+            'difficulty_rating': difficulty_rating,
+            'review_date': datetime.now().isoformat()
+        }
+        supabase.table('review_sessions').insert(session_insert).execute()
+
+        # Atualizar a tabela 'summaries'
+        summary_update = {
+            'current_interval': new_interval,
+            'ease_factor': new_ease_factor,
+            'next_review_date': new_review_date,
+            'last_review_date': datetime.now().isoformat()
+        }
+        supabase.table('summaries').update(summary_update).eq('id', summary_id).execute()
+
+        return jsonify({"message": "Review completed successfully"}), 200
+
     except Exception as e:
-        print(f"!!! ERRO INTERNO CATASTRÓFICO em /reviews/complete: {str(e)} !!!")
-        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+        print(e)
+        return jsonify({"error": str(e)}), 500
 
 @reviews_bp.route('/frequency', methods=['PUT'])
 @require_auth
