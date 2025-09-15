@@ -115,12 +115,13 @@ def start_review_session():
 @reviews_bp.route('/complete', methods=['POST'])
 @require_auth
 def complete_review():
+    """Marca uma revisão de resumo como completa e atualiza a próxima data."""
     try:
         current_user = get_current_user()
         data = request.get_json()
 
         if not data or 'summary_id' not in data or 'difficulty_rating' not in data:
-            return jsonify({"error": "Missing required fields"}), 400
+            return jsonify({"error": "Campos obrigatórios ausentes"}), 400
         
         summary_id = data['summary_id']
         difficulty_rating = int(data['difficulty_rating'])
@@ -128,74 +129,80 @@ def complete_review():
         supabase = get_supabase_client()
         user_id = current_user['id']
 
-        # --- NOVA LÓGICA DE ACOPLAMENTO ---
-        # 1. Buscar todos os flashcards associados a este resumo
+        # Etapa 1: Obter a sessão de revisão ATUAL para este resumo
+        session_response = supabase.table('review_sessions').select('id, review_count').eq('user_id', user_id).eq('summary_id', summary_id).limit(1).execute()
+
+        if not session_response.data:
+            return jsonify({"error": "Sessão de revisão não encontrada para este resumo"}), 404
+        
+        current_session = session_response.data[0]
+        
+        # Etapa 2: Lógica de acoplamento
         flashcards_response = supabase.table('flashcards').select('id').eq('summary_id', summary_id).eq('user_id', user_id).execute()
         
         coupling_data = None
         if flashcards_response.data:
             flashcard_ids = [fc['id'] for fc in flashcards_response.data]
-
-            # 2. Buscar as sessões de revisão desses flashcards para obter as notas mais recentes
             sessions_response = supabase.table('flashcard_review_sessions').select('difficulty_rating, review_count').in_('flashcard_id', flashcard_ids).execute()
             
             if sessions_response.data:
-                all_grades_are_1 = all(s['difficulty_rating'] == 5 for s in sessions_response.data) # No app, 5 é Muito Difícil (g=1 na sua fórmula)
-
-                card_grades_for_coupling = {
+                all_grades_are_1 = all(s['difficulty_rating'] == 5 for s in sessions_response.data)
+                coupling_data = {
                     "all_grades_are_1": all_grades_are_1,
-                    "grades": [
-                        {
-                            "grade": s['difficulty_rating'], 
-                            "weight": min(1.0, s['review_count'] / 3.0) # Peso por confiança (k=3)
-                        } 
-                        for s in sessions_response.data
-                    ]
+                    "grades": [{"grade": s['difficulty_rating'], "weight": min(1.0, s['review_count'] / 3.0)} for s in sessions_response.data]
                 }
-                coupling_data = card_grades_for_coupling
 
-        # ------------------------------------
-        
-        # Chamar a nova função RPC v2
+        # Etapa 3: Chamar a RPC
         calc_response = supabase.rpc('calculate_srs_update_v2', {
             'p_item_id': summary_id,
             'p_item_type': 'summary',
             'p_user_id': user_id,
             'p_grade': difficulty_rating,
-            'p_coupling_data': coupling_data  # Passa os dados de acoplamento
+            'p_coupling_data': coupling_data
         }).execute()
         
         if not calc_response.data:
-            return jsonify({"error": "Failed to calculate SRS update"}), 500
+            return jsonify({"error": "Falha ao calcular a atualização do SRS"}), 500
 
-        srs_data = calc_response.data[0]
-        new_interval = srs_data['new_interval']
-        new_ease_factor = srs_data['new_ease_factor']
-        new_review_date = srs_data['new_review_date']
+        # ==================== CORREÇÃO APLICADA AQUI ====================
+        # A resposta da RPC é um único objeto. Removemos o acesso ao índice [0].
+        srs_data = calc_response.data
 
-        # Inserir na tabela 'review_sessions'
-        session_insert = {
-            'user_id': user_id,
-            'summary_id': summary_id,
+        # ==================== CORREÇÃO APLICADA AQUI ====================
+        # Alinhe os nomes das chaves com o que a função SQL realmente retorna.
+        # Provavelmente, a função retorna 'next_review_date' e não 'new_review_date'.
+        update_data = {
+            'last_reviewed': datetime.now().isoformat(),
+            'next_review': srs_data['next_review_date'],  # Mude de 'new_review_date'
+            'review_count': current_session['review_count'] + 1,
             'difficulty_rating': difficulty_rating,
-            'review_date': datetime.now().isoformat()
+            'ease_factor': srs_data['new_ease_factor'],
+            'interval_days': srs_data['new_interval'],
+            'last_weight_multiplier': srs_data.get('new_weight_multiplier'),
+            'is_completed': (6 - difficulty_rating) >= 4
         }
-        supabase.table('review_sessions').insert(session_insert).execute()
+        # =================================================================
 
-        # Atualizar a tabela 'summaries'
-        summary_update = {
-            'current_interval': new_interval,
-            'ease_factor': new_ease_factor,
-            'next_review_date': new_review_date,
-            'last_review_date': datetime.now().isoformat()
-        }
-        supabase.table('summaries').update(summary_update).eq('id', summary_id).execute()
+        update_response = supabase.table('review_sessions').update(update_data).eq('id', current_session['id']).execute()
 
-        return jsonify({"message": "Review completed successfully"}), 200
+        if not update_response.data:
+            return jsonify({"error": "Falha ao atualizar a sessão de revisão"}), 400
+        
+        return jsonify({
+            "message": "Revisão completada com sucesso",
+            "review_session": update_response.data[0]
+        }), 200
 
     except Exception as e:
-        print(e)
+        print(f"ERRO CRÍTICO em /reviews/complete: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+    
+
+
+
+
 
 @reviews_bp.route('/frequency', methods=['PUT'])
 @require_auth
