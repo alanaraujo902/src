@@ -115,7 +115,7 @@ def generate_summary():
 @summaries_bp.route('', methods=['POST'])
 @require_auth
 def create_summary():
-    """Criar novo resumo"""
+    """Criar novo resumo (agora aceita um ID opcional do cliente)"""
     try:
         current_user = get_current_user()
         data = request.get_json()
@@ -132,9 +132,12 @@ def create_summary():
         if not subject_response.data:
             return jsonify({'error': 'Matéria não encontrada'}), 404
         
+        # Se o cliente enviar um ID, use-o. Senão, gere um novo.
+        summary_id = data.get('id', str(uuid.uuid4()))
+        
         # Dados do resumo
         summary_data = {
-            'id': str(uuid.uuid4()),
+            'id': summary_id, # <-- USA O ID DEFINIDO
             'user_id': current_user['id'],
             'subject_id': data['subject_id'],
             'title': data['title'],
