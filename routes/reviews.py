@@ -137,43 +137,30 @@ def complete_review():
         
         current_session = session_response.data[0]
         
-        # Etapa 2: Lógica de acoplamento
-        flashcards_response = supabase.table('flashcards').select('id').eq('summary_id', summary_id).eq('user_id', user_id).execute()
-        
-        coupling_data = None
-        if flashcards_response.data:
-            flashcard_ids = [fc['id'] for fc in flashcards_response.data]
-            sessions_response = supabase.table('flashcard_review_sessions').select('difficulty_rating, review_count').in_('flashcard_id', flashcard_ids).execute()
-            
-            if sessions_response.data:
-                all_grades_are_1 = all(s['difficulty_rating'] == 5 for s in sessions_response.data)
-                coupling_data = {
-                    "all_grades_are_1": all_grades_are_1,
-                    "grades": [{"grade": s['difficulty_rating'], "weight": min(1.0, s['review_count'] / 3.0)} for s in sessions_response.data]
-                }
+        # ==================== INÍCIO DA CORREÇÃO PRINCIPAL ====================
+        # Etapa 2: Obter dados de acoplamento DIRETAMENTE do cliente
+        # O cliente já envia esses dados no corpo da requisição. Não há necessidade de recalcular.
+        # A função request.get_json() já converte o corpo do JSON em um dicionário Python.
+        coupling_data = data.get('session_card_grades')
+        # ==================== FIM DA CORREÇÃO PRINCIPAL ======================
 
-        # Etapa 3: Chamar a RPC
+        # Etapa 3: Chamar a RPC (agora passando o dicionário diretamente)
         calc_response = supabase.rpc('calculate_srs_update_v2', {
             'p_item_id': summary_id,
             'p_item_type': 'summary',
             'p_user_id': user_id,
             'p_grade': difficulty_rating,
-            'p_coupling_data': coupling_data
+            'p_coupling_data': json.dumps(coupling_data or {})  # <-- string JSON
         }).execute()
         
         if not calc_response.data:
             return jsonify({"error": "Falha ao calcular a atualização do SRS"}), 500
 
-        # ==================== CORREÇÃO APLICADA AQUI ====================
-        # A resposta da RPC é um único objeto. Removemos o acesso ao índice [0].
         srs_data = calc_response.data
 
-        # ==================== CORREÇÃO APLICADA AQUI ====================
-        # Alinhe os nomes das chaves com o que a função SQL realmente retorna.
-        # Provavelmente, a função retorna 'next_review_date' e não 'new_review_date'.
         update_data = {
             'last_reviewed': datetime.now().isoformat(),
-            'next_review': srs_data['next_review_date'],  # Mude de 'new_review_date'
+            'next_review': srs_data['next_review_date'],
             'review_count': current_session['review_count'] + 1,
             'difficulty_rating': difficulty_rating,
             'ease_factor': srs_data['new_ease_factor'],
@@ -181,7 +168,6 @@ def complete_review():
             'last_weight_multiplier': srs_data.get('new_weight_multiplier'),
             'is_completed': (6 - difficulty_rating) >= 4
         }
-        # =================================================================
 
         update_response = supabase.table('review_sessions').update(update_data).eq('id', current_session['id']).execute()
 

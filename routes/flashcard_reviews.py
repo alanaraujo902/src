@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from src.config.database import get_supabase_client
 from src.utils.auth import require_auth, get_current_user
 import traceback
+import json 
 
 flashcard_reviews_bp = Blueprint('flashcard_reviews', __name__)
 
@@ -121,7 +122,7 @@ def complete_flashcard_review():
             'p_item_type': 'flashcard',
             'p_user_id': current_user['id'],
             'p_grade': difficulty_rating,
-            'p_coupling_data': coupling_data
+            'p_coupling_data': json.dumps(coupling_data) if coupling_data else None
         }).execute()
 
         # Adicione um log para ver a resposta da RPC
