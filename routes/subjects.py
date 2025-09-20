@@ -207,12 +207,9 @@ def get_subject_and_descendants_summaries(subject_id):
         current_user = get_current_user()
         supabase = get_supabase_client()
 
-        # Parâmetros de paginação
-        limit = int(request.args.get('limit', 100)) # Aumentar o limite padrão para esta visualização
+        limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
 
-        # 1. Usar uma função RPC para obter todos os IDs descendentes (a mesma do delete)
-        #    Certifique-se que a função 'get_subject_and_descendant_ids' (criada abaixo) existe no seu banco.
         id_response = supabase.rpc('get_subject_and_descendant_ids', {'start_subject_id': subject_id}).execute()
         
         if not id_response.data:
@@ -220,9 +217,29 @@ def get_subject_and_descendants_summaries(subject_id):
 
         subject_ids = [item['id'] for item in id_response.data]
 
-        # 2. Buscar todos os resumos onde o subject_id está na lista de IDs encontrados
-        query = supabase.table('summaries').select('''...''').in_('subject_id', subject_ids).eq('user_id', current_user['id']).is_('deleted_at', None)
-
+        # ==================== INÍCIO DA CORREÇÃO ====================
+        # Substituímos o "..." por uma seleção explícita para evitar ambiguidade.
+        # Incluímos todos os campos da tabela summaries e os campos necessários de subjects.
+        query = supabase.table('summaries').select('''
+            id,
+            user_id,
+            subject_id,
+            title,
+            content,
+            original_query,
+            difficulty_level,
+            is_favorite,
+            created_at,
+            updated_at,
+            deleted_at,
+            free_rev,
+            incidence_weight,
+            subjects (
+                name,
+                color
+            )
+        ''').in_('subject_id', subject_ids).eq('user_id', current_user['id']).is_('deleted_at', None)
+        # ===================== FIM DA CORREÇÃO ======================
         
         response = query.order('created_at', desc=True).range(offset, offset + limit - 1).execute()
         
