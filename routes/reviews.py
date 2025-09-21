@@ -145,12 +145,20 @@ def complete_review():
         # ==================== FIM DA CORREÇÃO PRINCIPAL ======================
 
         # Etapa 3: Chamar a RPC (agora passando o dicionário diretamente)
+        # Chamada Nova
+        # Supondo que você coletou 'correct' e 'incorrect' durante a sessão de revisão
+        exercise_results = {
+            'correct_count': 5, # Exemplo
+            'incorrect_count': 1  # Exemplo
+        }
+
         calc_response = supabase.rpc('calculate_srs_update_v2', {
             'p_item_id': summary_id,
             'p_item_type': 'summary',
             'p_user_id': user_id,
             'p_grade': difficulty_rating,
-            'p_coupling_data': json.dumps(coupling_data or {})  # <-- string JSON
+            'p_coupling_data': coupling_data, # Já é um dict/json
+            'p_exercise_data': exercise_results # Novo payload
         }).execute()
         
         if not calc_response.data:

@@ -94,6 +94,8 @@ class GPTService:
             raise
     # ==========================================================================
 
+    
+
     # ==================== RESUMO COM ESTILO SELECIONÁVEL ====================
     def summarize_text(self, text_to_summarize: str, prompt_style: str = "default") -> str:
         """
@@ -119,6 +121,73 @@ class GPTService:
             raise
     # ======================================================================
 
+    def generate_exercise_from_text(self, text_content: str) -> str:
+        """
+        Envia um texto para a IA e pede para criar um exercício estruturado.
+        """
+        system_prompt = """
+        Você é um especialista em criar questões de múltipla escolha para estudantes.
+        Analise o texto fornecido e crie UMA ÚNICA questão objetiva com 5 alternativas (A, B, C, D, E).
+        Siga ESTRITAMENTE o seguinte formato de saída, sem qualquer texto adicional antes ou depois:
+
+        Questão
+        +Enunciado: "[coloque o enunciado completo da questão aqui, baseado no texto]" +Fim do enunciado
+        +Enunciado de alterantivas
+        + A) "[enunciado da alternativa A]"
+        + B) "[enunciado da alternativa B]"
+        + C) "[enunciado da alternativa C]"
+        + D) "[enunciado da alternativa D]"
+        + E) "[enunciado da alternativa E]"
+        +Fim dos enunciados de alternativas
+        +Gabarito: [letra correta, ex: A]
+        """
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-5-nano",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": text_content},
+                ],
+                max_completion_tokens=1000, # Ajuste conforme necessário
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            print(f"ERRO AO GERAR EXERCÍCIO COM GPT: {e}")
+            raise
+
+    # ==================== NOVO MÉTODO PARA INTEGRAR CONHECIMENTO ====================
+    def integrate_exercise_into_summary(self, summary_content: str, exercise_statement: str, exercise_answer: str) -> str:
+        """
+        Integra o conhecimento de um exercício em um resumo existente.
+        """
+        system_prompt = """
+        Você é um assistente de estudos especialista em refinar e consolidar conhecimento.
+        A seguir, você receberá o conteúdo de um resumo existente e uma questão de exercício relacionada a ele.
+        Sua tarefa é integrar de forma inteligente e coesa o conhecimento principal do exercício ao resumo. Não apenas cole a questão, mas incorpore a informação que ela valida no fluxo natural do texto.
+        Mantenha o formato Markdown original do resumo.
+        Retorne APENAS o texto completo e atualizado do resumo.
+        """
+        user_content = f"""
+        --- RESUMO ATUAL ---
+        {summary_content}
+
+        --- EXERCÍCIO PARA INTEGRAR ---
+        Enunciado: {exercise_statement}
+        Resposta Correta: {exercise_answer}
+        """
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-5-nano",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                max_completion_tokens=5000,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            print(f"ERRO AO INTEGRAR EXERCÍCIO NO RESUMO: {e}")
+            raise
 
 def get_gpt_service() -> GPTService:
     """Helper para obter o cliente GPT a partir das configurações do Flask."""

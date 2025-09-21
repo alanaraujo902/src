@@ -19,6 +19,7 @@ def register_blueprints(app: Flask):
     from .flashcard_reviews import flashcard_reviews_bp 
     from .gpt_utils import gpt_utils_bp 
     from .images import images_bp
+    from .exercises import exercises_bp
 
     # Registrar os blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -32,3 +33,4 @@ def register_blueprints(app: Flask):
     app.register_blueprint(flashcard_reviews_bp, url_prefix='/api/flashcard-reviews') 
     app.register_blueprint(gpt_utils_bp, url_prefix='/api/gpt') # <-- ADICIONAR ESTA LINHA
     app.register_blueprint(images_bp, url_prefix='/api/images')
+    app.register_blueprint(exercises_bp, url_prefix='/api/exercises')
