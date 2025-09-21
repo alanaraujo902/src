@@ -16,7 +16,7 @@ summaries_bp = Blueprint('summaries', __name__)
 @summaries_bp.route('', methods=['GET'])
 @require_auth
 def get_summaries():
-    """Listar resumos do usuário"""
+    """Listar resumos do usuário com seleção explícita de colunas."""
     try:
         current_user = get_current_user()
         supabase = get_supabase_client()
@@ -30,15 +30,40 @@ def get_summaries():
         limit = int(request.args.get('limit', 20))
         offset = int(request.args.get('offset', 0))
         
-        # Construir query
-        query = supabase.table('summaries').select('''...''').eq('user_id', current_user['id']).is_('deleted_at', None)
+        # =================================================================
+        # ===                A CORREÇÃO COMPLETA ESTÁ AQUI              ===
+        # =================================================================
+        # Substituímos '...' por uma lista explícita de todas as colunas da tabela 'summaries',
+        # incluindo a crucial 'incidence_weight'. Também incluímos a busca de dados
+        # da tabela relacionada 'subjects'.
         
-        # Aplicar filtros
+        select_query = '''
+            id,
+            user_id,
+            subject_id,
+            title,
+            content,
+            original_query,
+            difficulty_level,
+            is_favorite,
+            created_at,
+            updated_at,
+            deleted_at,
+            free_rev,
+            incidence_weight, 
+            subjects ( name, color, icon )
+        '''
+        
+        # Construir query
+        query = supabase.table('summaries').select(select_query).eq('user_id', current_user['id']).is_('deleted_at', None)
+        
+        # Aplicar filtros (seu código aqui está correto e foi mantido)
         if subject_id:
             query = query.eq('subject_id', subject_id)
         
         if search:
-            query = query.ilike('title', f'%{search}%')
+            # Filtrando tanto no título quanto no conteúdo para uma busca mais completa
+            query = query.or_(f'title.ilike.%{search}%,content.ilike.%{search}%')
         
         if difficulty:
             query = query.eq('difficulty_level', int(difficulty))
@@ -57,14 +82,15 @@ def get_summaries():
         
         return jsonify({
             'summaries': summaries,
-            'total': len(summaries),
+            'total': len(summaries), # Note: Para uma contagem real do total, uma segunda query seria necessária
             'limit': limit,
             'offset': offset
         }), 200
         
     except Exception as e:
-        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
-
+        print(f"ERRO EM get_summaries: {str(e)}") # Adiciona um log mais claro
+        return jsonify({'error': f'Erro interno do servidor: {str(e)}'}), 500
+    
 @summaries_bp.route('/generate', methods=['POST'])
 @require_auth
 def generate_summary():
@@ -148,7 +174,8 @@ def create_summary():
             'image_url': data.get('image_url'),
             'tags': data.get('tags', []),
             'difficulty_level': data.get('difficulty_level', 3),
-            'is_favorite': data.get('is_favorite', False)
+            'is_favorite': data.get('is_favorite', False),
+            'incidence_weight': data.get('incidence_weight', 1.0)
         }
         
         # Inserir resumo

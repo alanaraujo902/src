@@ -41,43 +41,50 @@ def create_subject():
     try:
         current_user = get_current_user()
         data = request.get_json()
-        
-        if not data or not data.get('name'):
-            return jsonify({'error': 'Nome da matéria é obrigatório'}), 400
-        
+
+        # --- INÍCIO DA MODIFICAÇÃO ---
+        # Validação mais robusta dos dados de entrada
+        if not data or not data.get('name') or not data.get('name').strip():
+            return jsonify({'error': 'O nome da matéria é obrigatório e não pode ser vazio'}), 400
+        # --- FIM DA MODIFICAÇÃO ---
+
         supabase = get_supabase_client()
         
-        # Dados da nova matéria
         subject_data = {
             'id': str(uuid.uuid4()),
             'user_id': current_user['id'],
-            'name': data['name'],
+            'name': data['name'].strip(), # Usa .strip() para remover espaços em branco
             'description': data.get('description', ''),
             'parent_id': data.get('parent_id'),
             'color': data.get('color', '#3B82F6'),
             'icon': data.get('icon', 'book')
         }
         
-        # Verificar se parent_id existe (se fornecido)
         if subject_data['parent_id']:
             parent_response = supabase.table('subjects').select('id').eq('id', subject_data['parent_id']).eq('user_id', current_user['id']).execute()
-            
             if not parent_response.data:
                 return jsonify({'error': 'Matéria pai não encontrada'}), 404
         
-        # Inserir matéria
         response = supabase.table('subjects').insert(subject_data).execute()
         
-        if response.data:
+        # O erro 400 provavelmente acontece aqui, vindo do Supabase
+        if not response.data:
+            # Se não houver dados, é provável que um erro de banco de dados tenha ocorrido.
+            # A causa mais comum é a falha da FK para user_id.
             return jsonify({
-                'message': 'Matéria criada com sucesso',
-                'subject': response.data[0]
-            }), 201
-        else:
-            return jsonify({'error': 'Erro ao criar matéria'}), 400
+                'error': 'Falha ao criar matéria. Verifique se o perfil de usuário existe ou se os dados são válidos.',
+                'details': 'PostgREST API did not return data for the inserted row.'
+            }), 500
+            
+        return jsonify({
+            'message': 'Matéria criada com sucesso',
+            'subject': response.data[0]
+        }), 201
             
     except Exception as e:
-        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+        # Adiciona um log mais detalhado no console do backend
+        print(f"ERRO CRÍTICO EM create_subject: {str(e)}")
+        return jsonify({'error': f'Erro interno do servidor: {str(e)}'}), 500
 
 @subjects_bp.route('/<subject_id>', methods=['GET'])
 @require_auth
