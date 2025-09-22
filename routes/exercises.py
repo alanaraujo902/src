@@ -201,3 +201,43 @@ def get_suggested_exercises():
         print(f"ERRO AO BUSCAR EXERCÍCIOS SUGERIDOS: {e}")
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
+# ====================================================================
+# ===          A NOVA ROTA COMPLETA E CORRIGIDA ENTRA AQUI         ===
+# ====================================================================
+@exercises_bp.route('', methods=['GET'])
+@require_auth
+def get_exercises():
+    """
+    Lista todos os exercícios do usuário, com suporte a filtros.
+    Esta rota é essencial para o funcionamento do SyncService.
+    """
+    try:
+        current_user = get_current_user()
+        supabase = get_supabase_client()
+        
+        # Parâmetros de filtro (opcionais, mas úteis para o futuro)
+        subject_id = request.args.get('subject_id')
+        summary_id = request.args.get('summary_id')
+        limit = int(request.args.get('limit', 100)) # Um limite maior para sync
+        offset = int(request.args.get('offset', 0))
+        
+        # Query base para buscar exercícios do usuário logado
+        query = supabase.table('exercises').select('*').eq('user_id', current_user['id'])
+        
+        # Aplicar filtros se eles forem fornecidos na URL
+        if subject_id:
+            query = query.eq('subject_id', subject_id)
+        if summary_id:
+            query = query.eq('summary_id', summary_id)
+            
+        # Ordenar pelos mais recentes e aplicar paginação
+        response = query.order('created_at', desc=True).range(offset, offset + limit - 1).execute()
+        
+        exercises = response.data if response.data else []
+        
+        return jsonify({'exercises': exercises}), 200
+
+    except Exception as e:
+        print(f"ERRO EM GET /exercises: {str(e)}")
+        return jsonify({'error': f'Erro interno do servidor: {str(e)}'}), 500
+# ====================================================================
