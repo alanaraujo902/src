@@ -4,27 +4,27 @@ from flask import Blueprint, request, jsonify
 from src.config.database import get_supabase_client
 from src.config.gpt_service import get_gpt_service
 from src.utils.auth import require_auth, get_current_user
-from src.utils.exercise_parser import parse_gpt_exercise_response # Utilitário que criamos
+from src.utils.exercise_parser import parse_single_gpt_exercise, parse_multiple_gpt_exercises
+
 import uuid
 import json
 
 exercises_bp = Blueprint('exercises', __name__)
 
-@exercises_bp.route('/generate-from-text', methods=['POST'])
+# ROTA (para reformatar múltiplos exercícios) - CORRIGIDA
+@exercises_bp.route('/reformat-and-save', methods=['POST'])
 @require_auth
-def generate_and_save_exercise():
+def reformat_and_save_exercises():
     """
-    Recebe um texto bruto, gera um exercício via IA, faz o parsing e salva no banco de dados.
+    Recebe um texto bruto com MÚLTIPLOS exercícios, envia para a IA para formatação,
+    faz o parsing da resposta e salva os exercícios no banco de dados.
     """
     data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Requisição sem corpo JSON'}), 400
-
-    text = data.get('text')
+    raw_text = data.get('text')
     subject_id = data.get('subject_id')
-    summary_id = data.get('summary_id') # Opcional
+    summary_id = data.get('summary_id')
 
-    if not text or not subject_id:
+    if not raw_text or not subject_id:
         return jsonify({'error': 'Campos "text" e "subject_id" são obrigatórios'}), 400
 
     gpt_service = get_gpt_service()
@@ -32,36 +32,59 @@ def generate_and_save_exercise():
     current_user = get_current_user()
 
     try:
-        # 1. Chamar a IA para gerar o exercício
-        raw_gpt_response = gpt_service.generate_exercise_from_text(text)
+        raw_gpt_response = gpt_service.reformat_exercises_from_text(raw_text)
 
-        # 2. Fazer o parsing da resposta para um formato estruturado
-        parsed_data = parse_gpt_exercise_response(raw_gpt_response)
 
-        # 3. Preparar e salvar o novo exercício no banco de dados
-        exercise_data = {
-            'id': str(uuid.uuid4()),
-            'user_id': current_user['id'],
-            'subject_id': subject_id,
-            'summary_id': summary_id,
-            'statement': parsed_data['statement'],
-            'options': parsed_data['options'], # A biblioteca supabase converte dict/list para JSONB
-            'answer': parsed_data['answer'],
-            'original_text': text,
-        }
+                # ====================================================================
+        # ===            O LOG DE DIAGNÓSTICO ESTÁ AQUI                  ===
+        # ====================================================================
+        # Loga a resposta bruta da IA ANTES de qualquer tentativa de parsing.
+        # Isso é essencial para depurar problemas de formatação da IA.
+        print("\n--- [ROTA-LOG 1] RESPOSTA BRUTA DA IA (PARA REFORMATAR) ---")
+        print(raw_gpt_response)
+        print("----------------------------------------------------------\n")
+        # ====================================================================
+
+        # ====================================================================
+        # ===                      A CORREÇÃO CRÍTICA                    ===
+        # ====================================================================
+        # Usa o novo parser para MÚLTIPLOS exercícios
+        parsed_exercises = parse_multiple_gpt_exercises(raw_gpt_response)
+        # ====================================================================
+
+        if not parsed_exercises:
+            return jsonify({'error': 'A IA não conseguiu formatar nenhum exercício a partir do texto fornecido.'}), 400
+
+        exercises_to_insert = [
+            {
+                'id': str(uuid.uuid4()),
+                'user_id': current_user['id'],
+                'subject_id': subject_id,
+                'summary_id': summary_id,
+                'statement': exercise['statement'],
+                'options': exercise['options'],
+                'answer': exercise['answer'],
+                'original_text': raw_text,
+            }
+            for exercise in parsed_exercises
+        ]
         
-        response = supabase.table('exercises').insert(exercise_data).execute()
-
+        response = supabase.table('exercises').insert(exercises_to_insert).execute()
         if not response.data:
-            raise Exception("Falha ao salvar o exercício. Verifique as permissões (RLS) da tabela 'exercises'.")
+            raise Exception("Falha ao salvar os exercícios. Verifique as permissões (RLS).")
 
-        return jsonify({'message': 'Exercício criado com sucesso', 'exercise': response.data[0]}), 201
+        return jsonify({
+            'message': f'{len(response.data)} exercícios criados com sucesso', 
+            'exercises': response.data
+        }), 201
 
-    except ValueError as ve: # Erro específico do nosso parser
+    except ValueError as ve:
         return jsonify({'error': f'Erro de parsing: {str(ve)}'}), 400
     except Exception as e:
-        print(f"ERRO EM /generate-from-text: {e}")
+        print(f"ERRO EM /reformat-and-save: {e}")
         return jsonify({'error': f'Erro interno do servidor: {str(e)}'}), 500
+
+
 
 @exercises_bp.route('/<exercise_id>/create-flashcard', methods=['POST'])
 @require_auth
@@ -177,3 +200,4 @@ def get_suggested_exercises():
     except Exception as e:
         print(f"ERRO AO BUSCAR EXERCÍCIOS SUGERIDOS: {e}")
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
+

@@ -3,6 +3,11 @@
 import os
 from typing import Dict, List
 from openai import OpenAI
+import httpx # Importe a biblioteca httpx, que é uma dependência da openai
+
+
+
+
 
 # ==================== PROMPTS DISPONÍVEIS ====================
 GPT_PROMPTS: Dict[str, str] = {
@@ -37,8 +42,25 @@ class GPTService:
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("GPT_API_KEY é obrigatório")
-        # Se precisar customizar o endpoint, ajuste base_url aqui.
-        self.client = OpenAI(api_key=api_key, base_url="https://api.openai.com/v1")
+        # ====================================================================
+        # ===                A CORREÇÃO COMPLETA ESTÁ AQUI                 ===
+        # ====================================================================
+        # Configura um cliente HTTP customizado com timeouts mais longos.
+        # A IA pode levar mais de 30 segundos para processar grandes blocos de texto.
+        timeout_config = httpx.Timeout(
+            connect=10.0,      # Tempo para estabelecer a conexão
+            read=120.0,        # Tempo para ler a resposta completa (aumentado para 2 minutos)
+            write=10.0,        # Tempo para enviar os dados
+            pool=10.0
+        )
+
+        # Instancia o cliente OpenAI passando a configuração de timeout.
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.openai.com/v1",
+            timeout=timeout_config
+        )
+        # ====================================================================
 
     # ==================== RESTAURADO: GERAÇÃO DE FLASHCARDS ====================
     def generate_flashcards_from_text(self, summary_content: str) -> List[Dict[str, str]]:
@@ -121,39 +143,82 @@ class GPTService:
             raise
     # ======================================================================
 
-    def generate_exercise_from_text(self, text_content: str) -> str:
+    def reformat_exercises_from_text(self, text_content: str) -> str:
         """
-        Envia um texto para a IA e pede para criar um exercício estruturado.
+        Envia um texto bruto contendo exercícios para a IA e pede para formatá-lo.
+        Inclui logs detalhados para depuração.
         """
+        # ==================== LOG 1: O que estamos enviando? ====================
+        print(f"\n--- [GPT-LOG 1] INICIANDO 'reformat_exercises_from_text' ---")
+        print(f"Tamanho do texto de entrada: {len(text_content)} caracteres")
+        # Loga os primeiros 500 caracteres do texto para inspeção
+        print(f"Início do texto de entrada: {text_content[:500]}...")
+        # =======================================================================
+        
         system_prompt = """
-        Você é um especialista em criar questões de múltipla escolha para estudantes.
-        Analise o texto fornecido e crie UMA ÚNICA questão objetiva com 5 alternativas (A, B, C, D, E).
-        Siga ESTRITAMENTE o seguinte formato de saída, sem qualquer texto adicional antes ou depois:
+        Você formatara um texto enviado. Ele é composto por exercícios de múltipla escolha e o gabarito das questões.
+        Não comente, não seja prolixo, não adicione comentários extras, envie apenas o que é pedido, sem ser solicito ou pedir se pode fazer algo a mais. 
+        Primeiro, identifique cada questão individualmente. Uma questão tem um enunciado e várias alternativas (a, b, c, d, etc.). As questões podem ser numeradas (ex: "Questão 4", "Questão 10").
+        Depois, localize o bloco de "gabarito" em algum lugar do texto. Ele conterá as respostas no formato "numeroLetra" (ex: "4c", "10a").
+        Para CADA questão que você identificou, encontre o seu número e associe-o à letra correta do bloco de gabarito.
 
-        Questão
-        +Enunciado: "[coloque o enunciado completo da questão aqui, baseado no texto]" +Fim do enunciado
-        +Enunciado de alterantivas
-        + A) "[enunciado da alternativa A]"
-        + B) "[enunciado da alternativa B]"
-        + C) "[enunciado da alternativa C]"
-        + D) "[enunciado da alternativa D]"
-        + E) "[enunciado da alternativa E]"
-        +Fim dos enunciados de alternativas
-        +Gabarito: [letra correta, ex: A]
+        Formate a saída para CADA questão usando as seguintes tags EXATAMENTE como mostrado. Coloque o conteúdo extraído entre aspas:
+
+                    Questão
+                    +Enunciado: "[coloque o enunciado completo da questão aqui, sem markdown]" +Fim do enunciado
+                    +Enunciado de alterantivas
+                    + A) "[enunciado da alternativa A]"
+                    + B) "[enunciado da alternativa B]"
+                    + C) "[enunciado da alternativa C]"
+                    ... (continue para todas as alternativas)
+                    +Fim dos enunciados de alternativas
+                    +Gabarito: [letra correta que você encontrou no bloco de gabarito]
+                    ---
+        Se houver múltiplas questões no texto de entrada, separe CADA BLOCO de questão formatada com "---" em uma nova linha.
+        NÃO adicione nenhum texto, introdução, comentário ou conclusão. A saída deve conter APENAS os blocos formatados.
         """
+        
         try:
+            # ==================== LOG 2: Chamando a API ====================
+            print("--- [GPT-LOG 2] Enviando requisição para a API da OpenAI... ---")
+            # ===============================================================
+            
             response = self.client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": text_content},
                 ],
-                max_completion_tokens=1000, # Ajuste conforme necessário
+                max_completion_tokens=50000,
             )
-            return response.choices[0].message.content or ""
+            
+            # ==================== LOG 3: O que recebemos de volta? ====================
+            print("--- [GPT-LOG 3] Resposta recebida da API da OpenAI ---")
+            # Log do objeto de resposta completo para verificar o uso de tokens e a razão de finalização
+            print(f"Objeto de Resposta Completo (diagnóstico): {response.model_dump_json(indent=2)}")
+            # =========================================================================
+
+            # Extrai o conteúdo da mensagem
+            response_content = response.choices[0].message.content or ""
+
+            # ==================== LOG 4: Qual conteúdo foi extraído? ====================
+            print("\n--- [GPT-LOG 4] Conteúdo de texto extraído da resposta ---")
+            print(f"Tamanho do conteúdo extraído: {len(response_content)} caracteres")
+            print("Conteúdo:")
+            print(response_content)
+            print("----------------------------------------------------------\n")
+            # ============================================================================
+
+            return response_content
+
         except Exception as e:
-            print(f"ERRO AO GERAR EXERCÍCIO COM GPT: {e}")
-            raise
+            # ==================== LOG 5: Ocorreu um erro na chamada? ====================
+            print(f"\n--- [GPT-LOG 5] ERRO CRÍTICO DURANTE A CHAMADA DA API ---")
+            print(f"Tipo do Erro: {type(e)}")
+            print(f"Mensagem de Erro: {e}")
+            print("----------------------------------------------------------\n")
+            # ===========================================================================
+            raise # Re-lança a exceção para que a rota possa tratá-la e retornar um erro 500
 
     # ==================== NOVO MÉTODO PARA INTEGRAR CONHECIMENTO ====================
     def integrate_exercise_into_summary(self, summary_content: str, exercise_statement: str, exercise_answer: str) -> str:
